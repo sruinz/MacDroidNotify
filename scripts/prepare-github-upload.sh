@@ -9,11 +9,22 @@ fi
 
 UPLOAD_ROOT="${MACDROID_GITHUB_UPLOAD_DIR:-$ROOT_DIR/artifacts/github-upload}"
 DEST_DIR="$UPLOAD_ROOT/MacDroidNotify-$VERSION"
+RELEASE_DIR="${MACDROID_RELEASE_DIR:-$ROOT_DIR/artifacts/release-binaries}"
 DRY_RUN=0
+SKIP_BUILD=0
+SKIP_RELEASE_BINARIES=0
 
-if [ "${1:-}" = "--dry-run" ]; then
-  DRY_RUN=1
-fi
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) DRY_RUN=1 ;;
+    --skip-build) SKIP_BUILD=1 ;;
+    --skip-release-binaries) SKIP_RELEASE_BINARIES=1 ;;
+    *)
+      echo "Unknown argument: $arg" >&2
+      exit 2
+      ;;
+  esac
+done
 
 case "$UPLOAD_ROOT" in
   "$ROOT_DIR"/artifacts/github-upload | "$ROOT_DIR"/artifacts/github-upload/*) ;;
@@ -31,6 +42,11 @@ fi
 print_plan() {
   echo "Version: $VERSION"
   echo "GitHub source snapshot: $DEST_DIR"
+  if [ "$SKIP_RELEASE_BINARIES" = "1" ]; then
+    echo "Release binaries: skipped"
+  else
+    echo "Release binaries: $RELEASE_DIR"
+  fi
   echo "Files copied from: git ls-files"
 }
 
@@ -65,7 +81,7 @@ MacDroid Notify GitHub 업로드 스냅샷
 - 복사 기준: 현재 저장소의 git 추적 파일 목록
 - 제외 대상: .git, 빌드 결과물, APK, Mac .app, Android SDK, Gradle 캐시, local.properties
 
-0.1.0을 GitHub에 단일 커밋으로 올리는 예:
+${VERSION}을 GitHub에 단일 커밋으로 올리는 예:
 
 cd "MacDroidNotify-$VERSION"
 git init
@@ -78,3 +94,11 @@ EOF
 clean_macos_metadata
 print_plan
 echo "GitHub 업로드 스냅샷 준비 완료: $DEST_DIR"
+
+if [ "$SKIP_RELEASE_BINARIES" != "1" ]; then
+  if [ "$SKIP_BUILD" = "1" ]; then
+    MACDROID_RELEASE_DIR="$RELEASE_DIR" "$ROOT_DIR/scripts/prepare-release-binaries.sh" --skip-build
+  else
+    MACDROID_RELEASE_DIR="$RELEASE_DIR" "$ROOT_DIR/scripts/prepare-release-binaries.sh"
+  fi
+fi

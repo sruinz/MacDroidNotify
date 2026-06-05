@@ -1,7 +1,7 @@
 import Foundation
 
 public enum ProtocolLimits {
-    public static let version = 1
+    public static let version = 2
     public static let maxNotificationTextCharacters = 512
     public static let maxClipboardBytes = 32 * 1024
 }

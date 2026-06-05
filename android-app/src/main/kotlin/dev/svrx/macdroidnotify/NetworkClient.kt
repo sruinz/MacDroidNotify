@@ -11,6 +11,8 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLSocket
 
 class NetworkClient(
     private val config: PairingConfig,
@@ -68,17 +70,20 @@ class NetworkClient(
 
     private fun runLoop() {
         try {
-            val connectedSocket = Socket()
+            val connectedSocket = tlsSocket()
             listener.onDebugLog("network connecting ${config.host}:${config.port}")
             connectedSocket.connect(InetSocketAddress(config.host, config.port), 5_000)
+            listener.onDebugLog("network tls handshake starting")
+            connectedSocket.startHandshake()
             socket = connectedSocket
-            listener.onDebugLog("network socket connected")
+            listener.onDebugLog("network tls socket connected")
 
             val reader = BufferedReader(InputStreamReader(connectedSocket.getInputStream(), Charsets.UTF_8))
             writer = BufferedWriter(OutputStreamWriter(connectedSocket.getOutputStream(), Charsets.UTF_8))
 
             val challengeLine = reader.readLine() ?: error("No challenge from Mac")
             val challenge = ProtocolCodec.decodeChallenge(challengeLine)
+            require(challenge.protocolVersion == ProtocolConstants.VERSION) { "Unsupported protocol version ${challenge.protocolVersion}" }
             listener.onDebugLog("network challenge received")
             sendLine(ProtocolCodec.hello(config, challenge.nonce))
             listener.onDebugLog("network hello sent")
@@ -114,6 +119,12 @@ class NetworkClient(
         } finally {
             close()
         }
+    }
+
+    private fun tlsSocket(): SSLSocket {
+        val context = SSLContext.getInstance("TLS")
+        context.init(null, arrayOf(PinnedCertificateTrustManager(config.tlsFingerprint)), null)
+        return context.socketFactory.createSocket() as SSLSocket
     }
 
     private fun sendLine(line: String): Boolean {

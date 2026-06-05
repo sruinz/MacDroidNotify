@@ -4,21 +4,39 @@ import Foundation
 import MacDroidNotifyCore
 
 final class AppDelegate: NSObject, NSApplicationDelegate, TcpNotificationServerDelegate {
+    private let legacyDefaultsMigrator = LegacyDefaultsMigrator()
     private let tokenStore = TokenStore()
+    private let macIdentityStore = MacIdentityStore()
+    private let tlsIdentityStore = TLSIdentityStore()
     private let portStore = PortStore()
+    private let loginItemController = LoginItemController()
+    private let debugLogStore = MacDebugLogStore()
     private let presenter = NotificationPresenter()
     private let deduplicator = NotificationDeduplicator(windowSeconds: 30)
 
     private var port: UInt16 = NetworkPort.defaultValue
     private var token = Data()
+    private var macId = ""
+    private var tlsIdentity: TLSIdentity?
     private var server: TcpNotificationServer?
     private var menu: StatusMenuController?
     private var pairingWindowController: PairingWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        debugLogStore.append("app launch")
+        legacyDefaultsMigrator.migrateIfNeeded()
         token = tokenStore.loadOrCreateToken()
+        macId = macIdentityStore.loadOrCreateMacId()
         port = portStore.loadPort()
+        installApplicationIcon()
         presenter.requestAuthorization()
+        do {
+            tlsIdentity = try tlsIdentityStore.loadOrCreateIdentity(macId: macId)
+            debugLogStore.append("tls identity ready fingerprint=\(tlsIdentity?.fingerprint ?? "")")
+        } catch {
+            debugLogStore.append("tls identity failed \(error.localizedDescription)")
+            showError("TLS 인증서를 준비하지 못했습니다: \(error.localizedDescription)")
+        }
 
         let menu = StatusMenuController()
         menu.onShowPairing = { [weak self] in self?.showPairingInfo() }
@@ -26,6 +44,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, TcpNotificationServerD
         menu.onCheckNotifications = { [weak self] in self?.showNotificationStatus() }
         menu.onSendTestNotification = { [weak self] in self?.sendMacTestNotification() }
         menu.onChangePort = { [weak self] in self?.showPortEditor() }
+        menu.onToggleLoginItem = { [weak self] in self?.toggleLoginItem() }
+        menu.onCopyDebugLog = { [weak self] in self?.copyDebugLog() }
+        menu.updateLoginItem(enabled: loginItemController.isEnabled())
         self.menu = menu
 
         startServer(port: port)
@@ -33,27 +54,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, TcpNotificationServerD
 
     private func startServer(port: UInt16) {
         server?.stop()
+        guard let tlsIdentity else {
+            menu?.updateStatus("TLS 준비 실패")
+            return
+        }
 
-        let server = TcpNotificationServer(port: port, token: token)
+        let server = TcpNotificationServer(
+            port: port,
+            token: token,
+            tlsIdentity: tlsIdentity.secIdentity,
+            bonjourRecord: BonjourTXTRecord(macId: macId, tlsFingerprint: tlsIdentity.fingerprint)
+        )
         server.delegate = self
         self.server = server
 
         do {
             try server.start()
             menu?.updateStatus("대기 중 :\(port)")
+            debugLogStore.append("server started port=\(port)")
         } catch {
             menu?.updateStatus("서버 시작 실패 :\(port)")
+            debugLogStore.append("server start failed \(error.localizedDescription)")
             showError("리스너를 시작하지 못했습니다: \(error.localizedDescription)")
         }
     }
 
     func serverDidUpdateStatus(_ status: String) {
+        debugLogStore.append("server status \(status)")
         DispatchQueue.main.async { [weak self] in
             self?.menu?.updateStatus(status)
         }
     }
 
     func serverDidReceiveNotification(_ payload: NotificationPayload) {
+        debugLogStore.append("notification received app=\(payload.appName) id=\(payload.id)")
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             guard deduplicator.shouldAccept(id: payload.id) else { return }
@@ -73,10 +107,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, TcpNotificationServerD
     }
 
     func serverDidReceiveClipboardText(_ text: String) {
+        debugLogStore.append("clipboard received textLen=\(text.count)")
         DispatchQueue.main.async { [weak self] in
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
             self?.menu?.updateStatus("클립보드 수신됨")
+        }
+    }
+
+    func serverDidAuthenticateDevice(deviceName: String) {
+        debugLogStore.append("device authenticated name=\(deviceName)")
+        DispatchQueue.main.async { [weak self] in
+            self?.enableLoginItemAfterPairing()
         }
     }
 
@@ -198,6 +240,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, TcpNotificationServerD
 
                 번들 ID: \(Bundle.main.bundleIdentifier ?? "없음")
                 실행 경로: \(Bundle.main.bundlePath)
+                로그인 자동 실행: \(self.loginItemController.statusDescription())
+                TLS fingerprint: \(self.tlsIdentity?.fingerprint ?? "없음")
+                \(self.iconDiagnostics())
                 """
                 alert.addButton(withTitle: "닫기")
                 alert.addButton(withTitle: "권한 다시 요청")
@@ -228,6 +273,100 @@ final class AppDelegate: NSObject, NSApplicationDelegate, TcpNotificationServerD
         }
     }
 
+    private func enableLoginItemAfterPairing() {
+        guard !loginItemController.isEnabled() else { return }
+        do {
+            try loginItemController.enable()
+            menu?.updateLoginItem(enabled: true)
+            debugLogStore.append("login item enabled after pairing")
+        } catch {
+            debugLogStore.append("login item enable failed \(error.localizedDescription)")
+        }
+    }
+
+    private func toggleLoginItem() {
+        do {
+            if loginItemController.isEnabled() {
+                try loginItemController.disable()
+            } else {
+                try loginItemController.enable()
+            }
+            menu?.updateLoginItem(enabled: loginItemController.isEnabled())
+            menu?.updateStatus("로그인 자동 실행: \(loginItemController.statusDescription())")
+            debugLogStore.append("login item toggled status=\(loginItemController.statusDescription())")
+        } catch {
+            debugLogStore.append("login item toggle failed \(error.localizedDescription)")
+            showError("로그인 자동 실행 설정을 바꾸지 못했습니다: \(error.localizedDescription)")
+        }
+    }
+
+    private func copyDebugLog() {
+        let report = debugLogStore.report(
+            status: menu?.currentStatus ?? "알 수 없음",
+            port: port,
+            macId: macId,
+            tlsFingerprint: tlsIdentity?.fingerprint ?? "없음",
+            loginStatus: loginItemController.statusDescription(),
+            iconDiagnostics: iconDiagnostics()
+        )
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(report, forType: .string)
+        menu?.updateStatus("디버그 로그 복사됨")
+    }
+
+    private func iconDiagnostics() -> String {
+        let bundle = Bundle.main
+        let iconFile = bundle.object(forInfoDictionaryKey: "CFBundleIconFile") as? String ?? "없음"
+        let iconName = bundle.object(forInfoDictionaryKey: "CFBundleIconName") as? String ?? "없음"
+        let iconPath = iconResourcePath()
+        let assetsCarPath = bundle.path(forResource: "Assets", ofType: "car")
+        let appIconSize = NSApplication.shared.applicationIconImage.map { image in
+            "\(Int(image.size.width))x\(Int(image.size.height))"
+        } ?? "없음"
+        let bundled = bundle.bundleURL.pathExtension == "app"
+        return """
+        앱 번들 실행: \(bundled ? "예" : "아니오")
+        CFBundleIconFile: \(iconFile)
+        CFBundleIconName: \(iconName)
+        아이콘 리소스: \(iconPath ?? "없음")
+        아이콘 리소스 존재: \(iconPath.map { FileManager.default.fileExists(atPath: $0) } == true ? "예" : "아니오")
+        Assets.car: \(assetsCarPath ?? "없음")
+        Assets.car 존재: \(assetsCarPath.map { FileManager.default.fileExists(atPath: $0) } == true ? "예" : "아니오")
+        앱 아이콘 이미지 크기: \(appIconSize)
+        알림 아이콘 참고: swift run처럼 .app 밖에서 실행하면 macOS 알림 아이콘이 비어 보일 수 있습니다.
+        """
+    }
+
+    private func installApplicationIcon() {
+        guard let iconPath = iconResourcePath(),
+              let image = NSImage(contentsOfFile: iconPath) else {
+            debugLogStore.append("app icon load failed")
+            return
+        }
+        NSApplication.shared.applicationIconImage = image
+        debugLogStore.append("app icon loaded path=\(iconPath) size=\(Int(image.size.width))x\(Int(image.size.height))")
+    }
+
+    private func iconResourcePath() -> String? {
+        let bundle = Bundle.main
+        let iconFile = bundle.object(forInfoDictionaryKey: "CFBundleIconFile") as? String
+        let iconName = bundle.object(forInfoDictionaryKey: "CFBundleIconName") as? String
+        let candidates = [iconFile, iconName, "MacDroidNotify"]
+            .compactMap { $0 }
+            .flatMap { value -> [String] in
+                let name = (value as NSString).deletingPathExtension
+                return [value, name]
+            }
+
+        for candidate in candidates {
+            let name = (candidate as NSString).deletingPathExtension
+            if let path = bundle.path(forResource: name, ofType: "icns") {
+                return path
+            }
+        }
+        return nil
+    }
+
     private func openNotificationSettings() {
         let urls = [
             "x-apple.systempreferences:com.apple.preference.notifications",
@@ -243,7 +382,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, TcpNotificationServerD
 
     private func makePairingURL() -> String {
         let host = LocalNetwork.bestIPv4Address() ?? "127.0.0.1"
-        return "macdroidnotify://pair?host=\(host)&port=\(port)&token=\(token.base64URLEncodedString())"
+        let payload = SecurePairingPayload(
+            host: host,
+            port: port,
+            token: token.base64URLEncodedString(),
+            macId: macId,
+            tlsFingerprint: tlsIdentity?.fingerprint ?? ""
+        )
+        return payload.urlString
     }
 
     private func makeQRCodeImage(for string: String) -> NSImage? {

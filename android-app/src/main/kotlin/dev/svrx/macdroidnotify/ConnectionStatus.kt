@@ -6,8 +6,12 @@ import org.json.JSONObject
 enum class ConnectionPhase {
     IDLE,
     PAIRING_REQUIRED,
+    DISCOVERING,
     CONNECTING,
     CONNECTED,
+    TLS_FAILED,
+    AUTH_FAILED,
+    RECONNECT_WAITING,
     FAILED,
 }
 
@@ -21,8 +25,12 @@ data class ConnectionStatusSnapshot(
         get() = when (phase) {
             ConnectionPhase.IDLE -> "대기 중"
             ConnectionPhase.PAIRING_REQUIRED -> "페어링 필요"
+            ConnectionPhase.DISCOVERING -> "Mac 탐색 중"
             ConnectionPhase.CONNECTING -> "연결 중"
             ConnectionPhase.CONNECTED -> "연결됨"
+            ConnectionPhase.TLS_FAILED -> "TLS 실패"
+            ConnectionPhase.AUTH_FAILED -> "인증 실패"
+            ConnectionPhase.RECONNECT_WAITING -> "재연결 대기"
             ConnectionPhase.FAILED -> "실패"
         }
 

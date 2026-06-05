@@ -92,3 +92,48 @@ import Testing
     #expect(NetworkPort.parseUserInput("65536") == nil)
     #expect(NetworkPort.parseUserInput("not-a-port") == nil)
 }
+
+@Test func securePairingURLRoundTripsVersionTwoFields() throws {
+    let payload = SecurePairingPayload(
+        host: "192.168.0.2",
+        port: 47_655,
+        token: "token-123",
+        macId: "mac-id",
+        tlsFingerprint: "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99"
+    )
+
+    let parsed = try #require(SecurePairingPayload.parse(payload.urlString))
+
+    #expect(parsed.host == "192.168.0.2")
+    #expect(parsed.port == 47_655)
+    #expect(parsed.token == "token-123")
+    #expect(parsed.macId == "mac-id")
+    #expect(parsed.tlsFingerprint == "AABBCCDDEEFF00112233445566778899AABBCCDDEEFF00112233445566778899")
+}
+
+@Test func securePairingRejectsLegacyVersionOneURL() {
+    let legacy = "macdroidnotify://pair?host=192.168.0.2&port=47655&token=token-123"
+
+    #expect(SecurePairingPayload.parse(legacy) == nil)
+}
+
+@Test func tlsFingerprintNormalizesAndValidatesSha256Hex() {
+    let fingerprint = "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99"
+
+    #expect(TLSFingerprint.normalize(fingerprint) == "AABBCCDDEEFF00112233445566778899AABBCCDDEEFF00112233445566778899")
+    #expect(TLSFingerprint.isValid(fingerprint))
+    #expect(!TLSFingerprint.isValid("abc"))
+}
+
+@Test func bonjourTXTRecordEncodesVersionMacIdAndFingerprint() throws {
+    let record = BonjourTXTRecord(
+        macId: "mac-123",
+        tlsFingerprint: "AABBCCDDEEFF00112233445566778899AABBCCDDEEFF00112233445566778899"
+    )
+
+    let parsed = try #require(BonjourTXTRecord.parse(record.dictionary))
+
+    #expect(record.dictionary["protocolVersion"] == "2")
+    #expect(parsed.macId == "mac-123")
+    #expect(parsed.tlsFingerprint == "AABBCCDDEEFF00112233445566778899AABBCCDDEEFF00112233445566778899")
+}

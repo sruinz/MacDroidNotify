@@ -39,6 +39,10 @@ class MainActivity : Activity() {
     private lateinit var hostInput: EditText
     private lateinit var portInput: EditText
     private lateinit var tokenInput: EditText
+    private lateinit var macIdInput: EditText
+    private lateinit var tlsFingerprintInput: EditText
+    private lateinit var manualSection: LinearLayout
+    private lateinit var manualToggleButton: Button
     private lateinit var statusTitle: TextView
     private lateinit var statusDetail: TextView
     private lateinit var pairingSummary: TextView
@@ -161,8 +165,15 @@ class MainActivity : Activity() {
             toast("알림 리스너 재연결을 요청했습니다.")
         }, compactLayout())
 
-        root.addView(text("고급/수동 입력", 17f, TEXT_PRIMARY).apply {
-            setPadding(0, 28, 0, 8)
+        manualToggleButton = button("고급/수동 입력 보기") { toggleManualSection() }
+        root.addView(manualToggleButton, spacedLayout())
+
+        manualSection = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
+        manualSection.addView(text("고급/수동 입력", 17f, TEXT_PRIMARY).apply {
+            setPadding(0, 8, 0, 8)
         })
 
         hostInput = editText("Mac IP")
@@ -172,13 +183,24 @@ class MainActivity : Activity() {
         tokenInput = editText("페어링 토큰").apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
         }
-        root.addView(hostInput, compactLayout())
-        root.addView(portInput, compactLayout())
-        root.addView(tokenInput, compactLayout())
+        macIdInput = editText("Mac ID").apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+        }
+        tlsFingerprintInput = editText("TLS fingerprint").apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+        }
+        manualSection.addView(hostInput, compactLayout())
+        manualSection.addView(portInput, compactLayout())
+        manualSection.addView(tokenInput, compactLayout())
+        manualSection.addView(macIdInput, compactLayout())
+        manualSection.addView(tlsFingerprintInput, compactLayout())
         enableFocusScroll(hostInput)
         enableFocusScroll(portInput)
         enableFocusScroll(tokenInput)
-        root.addView(button("수동 입력 저장") { savePairing() }, compactLayout())
+        enableFocusScroll(macIdInput)
+        enableFocusScroll(tlsFingerprintInput)
+        manualSection.addView(button("수동 입력 저장") { savePairing() }, compactLayout())
+        root.addView(manualSection, compactLayout())
 
         root.addView(button("Android 클립보드를 Mac으로 보내기") {
             startActivity(Intent(this, SendClipboardActivity::class.java))
@@ -192,6 +214,13 @@ class MainActivity : Activity() {
         installKeyboardAwareScrolling()
         fillFields(saved)
         refreshStatus()
+        maybeAutoStartService(saved)
+    }
+
+    private fun toggleManualSection() {
+        val shouldShow = manualSection.visibility != View.VISIBLE
+        manualSection.visibility = if (shouldShow) View.VISIBLE else View.GONE
+        manualToggleButton.text = if (shouldShow) "고급/수동 입력 숨기기" else "고급/수동 입력 보기"
     }
 
     private fun fillFields(saved: PairingConfig) {
@@ -199,6 +228,8 @@ class MainActivity : Activity() {
             hostInput.setText(saved.host)
             portInput.setText(saved.port.toString())
             tokenInput.setText(saved.token)
+            macIdInput.setText(saved.macId)
+            tlsFingerprintInput.setText(saved.tlsFingerprint)
         }
     }
 
@@ -207,9 +238,11 @@ class MainActivity : Activity() {
             host = hostInput.text.toString().trim(),
             port = portInput.text.toString().toIntOrNull() ?: 0,
             token = tokenInput.text.toString().trim(),
+            macId = macIdInput.text.toString().trim(),
+            tlsFingerprint = tlsFingerprintInput.text.toString().trim(),
         )
         if (!pairing.isComplete()) {
-            statusStore.save(ConnectionStatusSnapshot(ConnectionPhase.PAIRING_REQUIRED, "Mac QR 또는 올바른 수동 값을 입력하세요."))
+            statusStore.save(ConnectionStatusSnapshot(ConnectionPhase.PAIRING_REQUIRED, "0.2.0 보안 QR 또는 v2 수동 값을 입력하세요."))
             refreshStatus()
             toast("페어링 정보가 올바르지 않습니다.")
             return
@@ -241,8 +274,8 @@ class MainActivity : Activity() {
                 val pairing = PairingUriParser.parse(barcode.rawValue)
                 if (pairing == null) {
                     debugLogStore.append("activity qr rejected length=${barcode.rawValue?.length ?: 0}")
-                    statusStore.save(ConnectionStatusSnapshot(ConnectionPhase.PAIRING_REQUIRED, "MacDroid Notify QR이 아닙니다."))
-                    toast("올바른 페어링 QR이 아닙니다.")
+                    statusStore.save(ConnectionStatusSnapshot(ConnectionPhase.PAIRING_REQUIRED, "0.2.0 보안 페어링 QR이 아닙니다."))
+                    toast("0.2.0 보안 페어링 QR이 아닙니다.")
                 } else {
                     debugLogStore.append("activity qr saved host=${pairing.host}:${pairing.port}")
                     config.save(pairing)
@@ -263,7 +296,7 @@ class MainActivity : Activity() {
 
     private fun requestNotificationPermissionThenStart() {
         if (!config.load().isComplete()) {
-            statusStore.save(ConnectionStatusSnapshot(ConnectionPhase.PAIRING_REQUIRED, "먼저 Mac의 QR을 스캔하세요."))
+            statusStore.save(ConnectionStatusSnapshot(ConnectionPhase.PAIRING_REQUIRED, "먼저 Mac의 0.2.0 QR을 스캔하세요."))
             refreshStatus()
             toast("먼저 QR로 페어링하세요.")
             return
@@ -287,6 +320,19 @@ class MainActivity : Activity() {
         }
         statusStore.save(ConnectionStatusSnapshot(ConnectionPhase.CONNECTING, "서비스 시작 중"))
         refreshStatus()
+        ConnectionService.start(this)
+    }
+
+    private fun maybeAutoStartService(saved: PairingConfig) {
+        if (!saved.serviceEnabled || !saved.isComplete()) return
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            statusStore.save(ConnectionStatusSnapshot(ConnectionPhase.PAIRING_REQUIRED, "자동 연결에는 알림 권한이 필요합니다."))
+            refreshStatus()
+            return
+        }
+        debugLogStore.append("activity auto start service")
         ConnectionService.start(this)
     }
 
@@ -315,7 +361,7 @@ class MainActivity : Activity() {
         statusDetail.text = status.description
         val notificationAccess = NotificationAccess.statusText(this)
         pairingSummary.text = if (pairing.isComplete()) {
-            "페어링 정보: ${pairing.host}:${pairing.port}\n알림 접근: $notificationAccess"
+            "페어링 정보: ${pairing.host}:${pairing.port}\nMac ID: ${pairing.macId}\n알림 접근: $notificationAccess"
         } else {
             "페어링 정보 없음\n알림 접근: $notificationAccess"
         }

@@ -8,6 +8,7 @@ captures/
 local.properties
 artifacts/test-builds/
 artifacts/github-upload/
+artifacts/release-binaries/
 *.iml
 *.apk
 *.aab

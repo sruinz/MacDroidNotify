@@ -1,11 +1,13 @@
 import Foundation
 import MacDroidNotifyCore
 import Network
+import Security
 
 protocol TcpNotificationServerDelegate: AnyObject {
     func serverDidUpdateStatus(_ status: String)
     func serverDidReceiveNotification(_ payload: NotificationPayload)
     func serverDidReceiveClipboardText(_ text: String)
+    func serverDidAuthenticateDevice(deviceName: String)
 }
 
 final class TcpNotificationServer {
@@ -13,18 +15,35 @@ final class TcpNotificationServer {
 
     private let port: UInt16
     private let token: Data
+    private let tlsIdentity: SecIdentity
+    private let bonjourRecord: BonjourTXTRecord
     private let queue = DispatchQueue(label: "dev.svrx.macdroidnotify.server")
     private var listener: NWListener?
     private var activeSession: ClientSession?
 
-    init(port: UInt16, token: Data) {
+    init(port: UInt16, token: Data, tlsIdentity: SecIdentity, bonjourRecord: BonjourTXTRecord) {
         self.port = port
         self.token = token
+        self.tlsIdentity = tlsIdentity
+        self.bonjourRecord = bonjourRecord
     }
 
     func start() throws {
         let port = NWEndpoint.Port(rawValue: port)!
-        let listener = try NWListener(using: .tcp, on: port)
+        let tlsOptions = NWProtocolTLS.Options()
+        guard let securityIdentity = sec_identity_create(tlsIdentity) else {
+            throw TcpNotificationServerError.tlsIdentityUnavailable
+        }
+        sec_protocol_options_set_local_identity(tlsOptions.securityProtocolOptions, securityIdentity)
+
+        let tcpOptions = NWProtocolTCP.Options()
+        let parameters = NWParameters(tls: tlsOptions, tcp: tcpOptions)
+        let listener = try NWListener(using: parameters, on: port)
+        listener.service = NWListener.Service(
+            name: Host.current().localizedName ?? "MacDroid Notify",
+            type: "_macdroidnotify._tcp",
+            txtRecord: NWTXTRecord(bonjourRecord.dictionary)
+        )
         listener.newConnectionHandler = { [weak self] connection in
             self?.accept(connection)
         }
@@ -68,6 +87,9 @@ final class TcpNotificationServer {
         session.onClipboard = { [weak self] text in
             self?.delegate?.serverDidReceiveClipboardText(text)
         }
+        session.onAuthenticated = { [weak self] deviceName in
+            self?.delegate?.serverDidAuthenticateDevice(deviceName: deviceName)
+        }
         activeSession = session
         session.start(queue: queue)
     }
@@ -75,11 +97,14 @@ final class TcpNotificationServer {
 
 enum TcpNotificationServerError: LocalizedError {
     case notConnected
+    case tlsIdentityUnavailable
 
     var errorDescription: String? {
         switch self {
         case .notConnected:
             return "Android가 Mac에 연결되어 있지 않습니다."
+        case .tlsIdentityUnavailable:
+            return "TLS identity를 Network.framework에 전달하지 못했습니다."
         }
     }
 }
@@ -88,6 +113,7 @@ private final class ClientSession {
     var onStatus: ((String) -> Void)?
     var onNotification: ((NotificationPayload) -> Void)?
     var onClipboard: ((String) -> Void)?
+    var onAuthenticated: ((String) -> Void)?
 
     private let connection: NWConnection
     private let token: Data
@@ -178,6 +204,7 @@ private final class ClientSession {
         }
         authenticated = true
         onStatus?("Android 연결됨: \(payload.deviceName)")
+        onAuthenticated?(payload.deviceName)
         try send(.pairingAccepted(PairingAcceptedPayload(
             macName: Host.current().localizedName ?? "Mac",
             timestampMillis: currentTimeMillis()

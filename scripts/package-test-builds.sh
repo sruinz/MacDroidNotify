@@ -5,6 +5,8 @@ ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 ARTIFACT_DIR="${MACDROID_ARTIFACT_DIR:-$ROOT_DIR/artifacts/test-builds}"
 ANDROID_DEST="$ARTIFACT_DIR/android/MacDroidNotify-debug.apk"
 MAC_APP_DEST="$ARTIFACT_DIR/mac/MacDroid Notify.app"
+MAC_ASSET_CATALOG="$ARTIFACT_DIR/mac/MacDroidNotify.xcassets"
+MAC_ASSET_INFO="$ARTIFACT_DIR/mac/asset-info.plist"
 MAC_EXECUTABLE="$ROOT_DIR/.build/arm64-apple-macosx/debug/MacDroidNotifyMac"
 ANDROID_APK="$ROOT_DIR/android-app/build/outputs/apk/debug/android-app-debug.apk"
 DRY_RUN=0
@@ -47,7 +49,16 @@ cp "$ANDROID_APK" "$ANDROID_DEST"
 cp "$MAC_EXECUTABLE" "$MAC_APP_DEST/Contents/MacOS/MacDroidNotifyMac"
 chmod +x "$MAC_APP_DEST/Contents/MacOS/MacDroidNotifyMac"
 CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/private/tmp/macdroid-clang-cache}" \
-swift "$ROOT_DIR/scripts/render-mac-icon.swift" "$MAC_APP_DEST/Contents/Resources/MacDroidNotify.icns"
+swift "$ROOT_DIR/scripts/render-mac-icon.swift" "$MAC_APP_DEST/Contents/Resources/MacDroidNotify.icns" "$MAC_ASSET_CATALOG/AppIcon.appiconset"
+xcrun actool \
+  --compile "$MAC_APP_DEST/Contents/Resources" \
+  --platform macosx \
+  --target-device mac \
+  --minimum-deployment-target 15.0 \
+  --app-icon AppIcon \
+  --output-partial-info-plist "$MAC_ASSET_INFO" \
+  "$MAC_ASSET_CATALOG" >/dev/null
+rm -rf "$MAC_ASSET_CATALOG" "$MAC_ASSET_INFO"
 
 cat > "$MAC_APP_DEST/Contents/Info.plist" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -57,19 +68,21 @@ cat > "$MAC_APP_DEST/Contents/Info.plist" <<'EOF'
   <key>CFBundleExecutable</key>
   <string>MacDroidNotifyMac</string>
   <key>CFBundleIdentifier</key>
-  <string>dev.svrx.macdroidnotify.mac</string>
+  <string>dev.svrx.macdroidnotify.app</string>
   <key>CFBundleName</key>
   <string>MacDroid Notify</string>
   <key>CFBundleDisplayName</key>
   <string>MacDroid Notify</string>
   <key>CFBundleIconFile</key>
   <string>MacDroidNotify</string>
+  <key>CFBundleIconName</key>
+  <string>AppIcon</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>0.2.0</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>3</string>
   <key>LSMinimumSystemVersion</key>
   <string>15.0</string>
   <key>LSUIElement</key>
@@ -79,11 +92,14 @@ cat > "$MAC_APP_DEST/Contents/Info.plist" <<'EOF'
 </dict>
 </plist>
 EOF
+printf 'APPL????' > "$MAC_APP_DEST/Contents/PkgInfo"
 
+plutil -lint "$MAC_APP_DEST/Contents/Info.plist" >/dev/null
 codesign --force --deep --sign - "$MAC_APP_DEST"
+codesign --verify --deep --strict "$MAC_APP_DEST"
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 if [ -x "$LSREGISTER" ]; then
-  "$LSREGISTER" -f "$MAC_APP_DEST"
+  "$LSREGISTER" -f -r "$MAC_APP_DEST"
 fi
 
 cat > "$ARTIFACT_DIR/README.txt" <<EOF
@@ -111,7 +127,7 @@ MacDroid Notify 테스트 산출물
    - Mac 메뉴 막대에서 "Mac 알림 상태 확인"과 "Mac 테스트 알림 보내기"로 macOS 알림 권한을 확인합니다.
    - "핑 테스트"와 "테스트 알림 보내기"로 연결과 macOS 알림 표시를 확인합니다.
 
-주의: 이 MVP는 같은 Wi-Fi 안에서만 동작하며, 알림/클립보드 내용은 로컬 네트워크로 전송됩니다.
+주의: 이 테스트 빌드는 같은 Wi-Fi 안에서만 동작하며, 0.2.0부터 Mac 자체 인증서 기반 TLS와 QR fingerprint pinning을 사용합니다.
 EOF
 
 print_plan

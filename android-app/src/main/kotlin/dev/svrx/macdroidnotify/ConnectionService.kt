@@ -20,11 +20,27 @@ class ConnectionService : Service(), NetworkClient.Listener {
     private lateinit var statusStore: ConnectionStatusStore
     private lateinit var debugLogStore: DebugLogStore
     private var lastMacName = ""
+    private var discovery: MacDiscovery? = null
+    private var discoveryRunning = false
+    private val healthPingTracker = HealthPingTracker(HEALTH_TIMEOUT_MS)
 
     private val reconnectRunnable = object : Runnable {
         override fun run() {
             ensureClient()
             handler.postDelayed(this, RECONNECT_DELAY_MS)
+        }
+    }
+
+    private val healthRunnable = object : Runnable {
+        override fun run() {
+            runHealthCheck()
+            handler.postDelayed(this, HEALTH_INTERVAL_MS)
+        }
+    }
+
+    private val healthTimeoutRunnable = object : Runnable {
+        override fun run() {
+            handleHealthTimeout()
         }
     }
 
@@ -44,6 +60,7 @@ class ConnectionService : Service(), NetworkClient.Listener {
         statusStore.save(initialStatus)
         startForeground(NOTIFICATION_ID, foregroundNotification(initialStatus))
         handler.post(reconnectRunnable)
+        handler.postDelayed(healthRunnable, HEALTH_INTERVAL_MS)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -71,6 +88,9 @@ class ConnectionService : Service(), NetworkClient.Listener {
     override fun onDestroy() {
         debugLogStore.append("service onDestroy")
         handler.removeCallbacks(reconnectRunnable)
+        handler.removeCallbacks(healthRunnable)
+        handler.removeCallbacks(healthTimeoutRunnable)
+        discovery?.stop()
         client?.close()
         client = null
         super.onDestroy()
@@ -87,8 +107,18 @@ class ConnectionService : Service(), NetworkClient.Listener {
     override fun onDisconnected(reason: String) {
         debugLogStore.append("service disconnected reason=$reason")
         client = null
-        val displayReason = if (reason == "Disconnected") "연결이 끊어졌습니다." else reason
-        updateStatus(ConnectionStatusSnapshot(ConnectionPhase.FAILED, displayReason))
+        val phase = when {
+            reason.contains("fingerprint", ignoreCase = true) ||
+                reason.contains("certificate", ignoreCase = true) ||
+                reason.contains("SSL", ignoreCase = true) -> ConnectionPhase.TLS_FAILED
+            reason.contains("protocol version", ignoreCase = true) ||
+                reason.contains("auth", ignoreCase = true) -> ConnectionPhase.AUTH_FAILED
+            else -> ConnectionPhase.RECONNECT_WAITING
+        }
+        val displayReason = if (reason == "Disconnected") "연결이 끊어졌습니다. 재연결을 기다립니다." else reason
+        updateStatus(ConnectionStatusSnapshot(phase, displayReason))
+        clearHealthPing()
+        handler.post { requestReconnect("disconnect") }
     }
 
     override fun onClipboardFromMac(text: String) {
@@ -100,6 +130,12 @@ class ConnectionService : Service(), NetworkClient.Listener {
     }
 
     override fun onPong(id: String, rttMillis: Long) {
+        val healthRttMillis = healthPingTracker.markPong(id, System.currentTimeMillis())
+        if (healthRttMillis != null) {
+            handler.removeCallbacks(healthTimeoutRunnable)
+            debugLogStore.append("health pong id=$id rtt=${healthRttMillis.coerceAtLeast(0)}")
+            return
+        }
         debugLogStore.append("service pong id=$id rtt=${rttMillis.coerceAtLeast(0)}")
         updateStatus(
             ConnectionStatusSnapshot(
@@ -121,17 +157,105 @@ class ConnectionService : Service(), NetworkClient.Listener {
         val config = configStore.load()
         if (!config.isComplete()) {
             debugLogStore.append("service ensureClient pairing missing")
-            updateStatus(ConnectionStatusSnapshot(ConnectionPhase.PAIRING_REQUIRED, "먼저 Mac의 QR을 스캔하세요."))
+            updateStatus(ConnectionStatusSnapshot(ConnectionPhase.PAIRING_REQUIRED, "먼저 Mac의 0.2.0 QR을 스캔하세요."))
             return
         }
         if (client?.isRunning == true) {
             debugLogStore.append("service ensureClient skipped client=${clientState()}")
             return
         }
+        if (discoveryRunning) {
+            debugLogStore.append("service ensureClient skipped discovery=running")
+            return
+        }
 
-        debugLogStore.append("service ensureClient new client host=${config.host}:${config.port}")
-        updateStatus(ConnectionStatusSnapshot(ConnectionPhase.CONNECTING, "${config.host}:${config.port} 연결 중"))
+        discoverThenConnect(config)
+    }
+
+    private fun discoverThenConnect(config: PairingConfig) {
+        discoveryRunning = true
+        clearHealthPing()
+        updateStatus(ConnectionStatusSnapshot(ConnectionPhase.DISCOVERING, "페어링된 Mac을 찾는 중"))
+        debugLogStore.append("service mdns discovery requested macId=${config.macId}")
+        discovery?.stop()
+        discovery = MacDiscovery(this, config.macId, object : MacDiscovery.Listener {
+            override fun onDiscovered(mac: DiscoveredMac) {
+                discoveryRunning = false
+                debugLogStore.append("service mdns discovered ${mac.host}:${mac.port} macId=${mac.macId}")
+                debugLogStore.setLastDiscovery("success ${mac.host}:${mac.port}")
+                configStore.updateEndpoint(mac.host, mac.port)
+                connect(configStore.load())
+            }
+
+            override fun onFailed(reason: String) {
+                discoveryRunning = false
+                debugLogStore.setLastDiscovery("${discoveryFailureKind(reason)} fallback ${config.host}:${config.port}")
+                debugLogStore.append("service mdns failed reason=$reason")
+                debugLogStore.append("service mdns fallback ${config.host}:${config.port}")
+                connect(config)
+            }
+
+            override fun onDebugLog(message: String) {
+                debugLogStore.append(message)
+            }
+        }).also { it.start() }
+    }
+
+    private fun connect(config: PairingConfig) {
+        debugLogStore.append("service ensureClient new tls client host=${config.host}:${config.port}")
+        updateStatus(ConnectionStatusSnapshot(ConnectionPhase.CONNECTING, "${config.host}:${config.port} TLS 연결 중"))
         client = NetworkClient(config, this).also { it.start() }
+    }
+
+    private fun runHealthCheck() {
+        val currentClient = client
+        if (currentClient?.isRunning != true || statusStore.load().phase != ConnectionPhase.CONNECTED) {
+            clearHealthPing()
+            return
+        }
+
+        if (!healthPingTracker.canSend()) return
+
+        val nowMillis = System.currentTimeMillis()
+        val id = "health-$nowMillis"
+        if (currentClient.sendPing(id)) {
+            healthPingTracker.markSent(id, nowMillis)
+            handler.removeCallbacks(healthTimeoutRunnable)
+            handler.postDelayed(healthTimeoutRunnable, HEALTH_TIMEOUT_MS)
+            debugLogStore.append("health ping sent id=$id")
+        } else {
+            clearHealthPing()
+            markSendFailure("health ping")
+        }
+    }
+
+    private fun handleHealthTimeout() {
+        val currentClient = client ?: return
+        val timedOutId = healthPingTracker.timedOut(System.currentTimeMillis()) ?: return
+        debugLogStore.append("health timeout id=$timedOutId")
+        clearHealthPing()
+        currentClient.close()
+        client = null
+        updateStatus(ConnectionStatusSnapshot(ConnectionPhase.RECONNECT_WAITING, "Mac 응답이 없어 재연결을 준비합니다."))
+        requestReconnect("health timeout")
+    }
+
+    private fun clearHealthPing() {
+        handler.removeCallbacks(healthTimeoutRunnable)
+        healthPingTracker.clear()
+    }
+
+    private fun requestReconnect(reason: String) {
+        debugLogStore.append("reconnect requested reason=$reason")
+        ensureClient()
+    }
+
+    private fun discoveryFailureKind(reason: String): String {
+        return when {
+            reason.contains("시간 초과") || reason.contains("timeout", ignoreCase = true) -> "timeout"
+            reason.contains("시작 실패") -> "startFailed"
+            else -> "failed"
+        }
     }
 
     private fun sendClipboard(text: String) {
@@ -194,9 +318,10 @@ class ConnectionService : Service(), NetworkClient.Listener {
 
     private fun markSendFailure(action: String) {
         debugLogStore.append("service send failed action=$action client=${clientState()}")
+        clearHealthPing()
         client?.close()
         client = null
-        updateStatus(ConnectionStatusSnapshot(ConnectionPhase.FAILED, "Mac에 연결되지 않았습니다."))
+        updateStatus(ConnectionStatusSnapshot(ConnectionPhase.RECONNECT_WAITING, "Mac에 연결되지 않았습니다. 재연결을 준비합니다."))
         handler.post {
             Toast.makeText(this, "Mac에 연결되지 않았습니다.", Toast.LENGTH_SHORT).show()
         }
@@ -304,6 +429,8 @@ class ConnectionService : Service(), NetworkClient.Listener {
         private const val NOTIFICATION_ID = 1001
         private const val CLIPBOARD_NOTIFICATION_ID = 1002
         private const val RECONNECT_DELAY_MS = 5_000L
+        private const val HEALTH_INTERVAL_MS = 10_000L
+        private const val HEALTH_TIMEOUT_MS = 8_000L
 
         const val ACTION_START = "dev.svrx.macdroidnotify.START"
         const val ACTION_STOP = "dev.svrx.macdroidnotify.STOP"
@@ -353,6 +480,7 @@ class ConnectionService : Service(), NetworkClient.Listener {
         }
 
         fun start(context: Context) {
+            AppConfig(context).setServiceEnabled(true)
             val intent = Intent(context, ConnectionService::class.java).setAction(ACTION_START)
             if (Build.VERSION.SDK_INT >= 26) {
                 context.startForegroundService(intent)
@@ -362,6 +490,7 @@ class ConnectionService : Service(), NetworkClient.Listener {
         }
 
         fun stop(context: Context) {
+            AppConfig(context).setServiceEnabled(false)
             context.startService(Intent(context, ConnectionService::class.java).setAction(ACTION_STOP))
         }
 

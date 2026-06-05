@@ -42,7 +42,7 @@ final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
         present(
             payload: NotificationPayload(
                 id: "mac-test-\(Int(Date().timeIntervalSince1970 * 1000))",
-                packageName: "dev.svrx.macdroidnotify.mac",
+                packageName: "dev.svrx.macdroidnotify.app",
                 appName: "MacDroid Notify",
                 title: "Mac 알림 테스트",
                 text: "MacDroid Notify가 macOS 알림을 표시할 수 있는지 확인합니다.",

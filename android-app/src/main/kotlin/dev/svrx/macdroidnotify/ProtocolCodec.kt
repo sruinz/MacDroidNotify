@@ -5,7 +5,9 @@ import java.util.Base64
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
-private const val PROTOCOL_VERSION = 1
+object ProtocolConstants {
+    const val VERSION = 2
+}
 private const val MAX_NOTIFICATION_CHARS = 512
 private const val MAX_CLIPBOARD_BYTES = 32 * 1024
 
@@ -38,7 +40,7 @@ object ProtocolCodec {
     fun hello(config: PairingConfig, nonce: String): String {
         return JSONObject()
             .put("type", "hello")
-            .put("protocolVersion", PROTOCOL_VERSION)
+            .put("protocolVersion", ProtocolConstants.VERSION)
             .put("deviceId", config.deviceId)
             .put("deviceName", config.deviceName)
             .put("auth", authCode(config.token, nonce))

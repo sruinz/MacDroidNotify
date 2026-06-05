@@ -9,6 +9,8 @@ import java.util.Locale
 interface DebugLogStorage {
     fun readLinesJson(): String?
     fun writeLinesJson(value: String)
+    fun readLastDiscovery(): String?
+    fun writeLastDiscovery(value: String)
 }
 
 class InMemoryDebugLogStorage : DebugLogStorage {
@@ -18,6 +20,14 @@ class InMemoryDebugLogStorage : DebugLogStorage {
 
     override fun writeLinesJson(value: String) {
         this.value = value
+    }
+
+    private var lastDiscovery: String? = null
+
+    override fun readLastDiscovery(): String? = lastDiscovery
+
+    override fun writeLastDiscovery(value: String) {
+        lastDiscovery = value
     }
 }
 
@@ -30,8 +40,15 @@ private class SharedPreferencesDebugLogStorage(context: Context) : DebugLogStora
         prefs.edit().putString(KEY, value).apply()
     }
 
+    override fun readLastDiscovery(): String? = prefs.getString(KEY_LAST_DISCOVERY, null)
+
+    override fun writeLastDiscovery(value: String) {
+        prefs.edit().putString(KEY_LAST_DISCOVERY, value).apply()
+    }
+
     private companion object {
         const val KEY = "debug_lines_json"
+        const val KEY_LAST_DISCOVERY = "last_discovery"
     }
 }
 
@@ -45,6 +62,10 @@ class DebugLogStore(private val storage: DebugLogStorage) {
         storage.writeLinesJson(JSONArray(trimmed).toString())
     }
 
+    fun setLastDiscovery(value: String) {
+        storage.writeLastDiscovery(value)
+    }
+
     fun buildReport(config: PairingConfig, status: ConnectionStatusSnapshot): String {
         return buildString {
             appendLine("MacDroid Notify debug")
@@ -53,6 +74,10 @@ class DebugLogStore(private val storage: DebugLogStorage) {
             appendLine("host=${config.host.ifBlank { "(empty)" }}")
             appendLine("port=${config.port}")
             appendLine("token=${maskToken(config.token)}")
+            appendLine("macId=${config.macId.ifBlank { "(empty)" }}")
+            appendLine("tlsFingerprint=${maskFingerprint(config.tlsFingerprint)}")
+            appendLine("serviceEnabled=${config.serviceEnabled}")
+            appendLine("lastDiscovery=${storage.readLastDiscovery().orEmpty().ifBlank { "(none)" }}")
             appendLine("deviceId=${config.deviceId.ifBlank { "(empty)" }}")
             appendLine("deviceName=${config.deviceName.ifBlank { "(empty)" }}")
             appendLine("logs:")
@@ -75,6 +100,12 @@ class DebugLogStore(private val storage: DebugLogStorage) {
         if (token.isBlank()) return "(empty)"
         if (token.length <= 8) return "*** len=${token.length}"
         return "${token.take(4)}...${token.takeLast(4)} len=${token.length}"
+    }
+
+    private fun maskFingerprint(fingerprint: String): String {
+        val normalized = TlsFingerprint.normalize(fingerprint)
+        if (normalized.isBlank()) return "(empty)"
+        return "${normalized.take(8)}...${normalized.takeLast(8)} len=${normalized.length}"
     }
 
     private fun formatTime(timestampMillis: Long): String {

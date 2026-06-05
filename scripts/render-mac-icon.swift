@@ -3,12 +3,13 @@
 import AppKit
 import Foundation
 
-guard CommandLine.arguments.count == 2 else {
-    fputs("usage: render-mac-icon.swift <output.icns>\n", stderr)
+guard CommandLine.arguments.count == 2 || CommandLine.arguments.count == 3 else {
+    fputs("usage: render-mac-icon.swift <output.icns> [AppIcon.appiconset]\n", stderr)
     exit(2)
 }
 
 let outputURL = URL(fileURLWithPath: CommandLine.arguments[1])
+let appIconSetURL = CommandLine.arguments.count == 3 ? URL(fileURLWithPath: CommandLine.arguments[2]) : nil
 let fileManager = FileManager.default
 try fileManager.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
 
@@ -96,23 +97,57 @@ func drawIcon(size: CGFloat) -> NSBitmapImageRep {
     return rep
 }
 
-let specs: [(name: String, size: Int)] = [
-    ("icon_16x16.png", 16),
-    ("icon_16x16@2x.png", 32),
-    ("icon_32x32.png", 32),
-    ("icon_32x32@2x.png", 64),
-    ("icon_128x128.png", 128),
-    ("icon_128x128@2x.png", 256),
-    ("icon_256x256.png", 256),
-    ("icon_256x256@2x.png", 512),
-    ("icon_512x512.png", 512),
-    ("icon_512x512@2x.png", 1024),
+let specs: [(name: String, pixelSize: Int, pointSize: String, scale: String)] = [
+    ("icon_16x16.png", 16, "16x16", "1x"),
+    ("icon_16x16@2x.png", 32, "16x16", "2x"),
+    ("icon_32x32.png", 32, "32x32", "1x"),
+    ("icon_32x32@2x.png", 64, "32x32", "2x"),
+    ("icon_128x128.png", 128, "128x128", "1x"),
+    ("icon_128x128@2x.png", 256, "128x128", "2x"),
+    ("icon_256x256.png", 256, "256x256", "1x"),
+    ("icon_256x256@2x.png", 512, "256x256", "2x"),
+    ("icon_512x512.png", 512, "512x512", "1x"),
+    ("icon_512x512@2x.png", 1024, "512x512", "2x"),
 ]
 
 for spec in specs {
-    let rep = drawIcon(size: CGFloat(spec.size))
+    let rep = drawIcon(size: CGFloat(spec.pixelSize))
     let data = rep.representation(using: .png, properties: [:])!
     try data.write(to: iconsetURL.appendingPathComponent(spec.name))
+}
+
+if let appIconSetURL {
+    try? fileManager.removeItem(at: appIconSetURL)
+    try fileManager.createDirectory(at: appIconSetURL, withIntermediateDirectories: true)
+    for spec in specs {
+        try fileManager.copyItem(
+            at: iconsetURL.appendingPathComponent(spec.name),
+            to: appIconSetURL.appendingPathComponent(spec.name)
+        )
+    }
+
+    let imageEntries = specs.map { spec in
+        """
+            {
+              "filename" : "\(spec.name)",
+              "idiom" : "mac",
+              "scale" : "\(spec.scale)",
+              "size" : "\(spec.pointSize)"
+            }
+        """
+    }.joined(separator: ",\n")
+    let contents = """
+    {
+      "images" : [
+    \(imageEntries)
+      ],
+      "info" : {
+        "author" : "xcode",
+        "version" : 1
+      }
+    }
+    """
+    try contents.write(to: appIconSetURL.appendingPathComponent("Contents.json"), atomically: true, encoding: .utf8)
 }
 
 let process = Process()

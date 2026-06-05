@@ -6,10 +6,13 @@ final class StatusMenuController: NSObject {
     var onCheckNotifications: (() -> Void)?
     var onSendTestNotification: (() -> Void)?
     var onChangePort: (() -> Void)?
+    var onToggleLoginItem: (() -> Void)?
+    var onCopyDebugLog: (() -> Void)?
 
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let appMenuItem = NSMenuItem(title: AppVersion.displayName, action: nil, keyEquivalent: "")
     private let statusMenuItem = NSMenuItem(title: "시작 중...", action: nil, keyEquivalent: "")
+    private let loginItemMenuItem = NSMenuItem(title: "로그인 시 자동 실행", action: #selector(toggleLoginItem), keyEquivalent: "")
 
     var currentStatus: String {
         statusMenuItem.title
@@ -37,6 +40,9 @@ final class StatusMenuController: NSObject {
         portItem.target = self
         menu.addItem(portItem)
 
+        loginItemMenuItem.target = self
+        menu.addItem(loginItemMenuItem)
+
         let clipboardItem = NSMenuItem(title: "Mac 클립보드를 Android로 보내기", action: #selector(sendClipboard), keyEquivalent: "c")
         clipboardItem.target = self
         menu.addItem(clipboardItem)
@@ -49,6 +55,10 @@ final class StatusMenuController: NSObject {
         notificationTestItem.target = self
         menu.addItem(notificationTestItem)
 
+        let debugItem = NSMenuItem(title: "디버그 로그 복사", action: #selector(copyDebugLog), keyEquivalent: "d")
+        debugItem.target = self
+        menu.addItem(debugItem)
+
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
@@ -56,6 +66,10 @@ final class StatusMenuController: NSObject {
 
     func updateStatus(_ text: String) {
         statusMenuItem.title = text
+    }
+
+    func updateLoginItem(enabled: Bool) {
+        loginItemMenuItem.state = enabled ? .on : .off
     }
 
     @objc private func showPairing() {
@@ -76,6 +90,14 @@ final class StatusMenuController: NSObject {
 
     @objc private func changePort() {
         onChangePort?()
+    }
+
+    @objc private func toggleLoginItem() {
+        onToggleLoginItem?()
+    }
+
+    @objc private func copyDebugLog() {
+        onCopyDebugLog?()
     }
 
     private static func statusIcon() -> NSImage {
