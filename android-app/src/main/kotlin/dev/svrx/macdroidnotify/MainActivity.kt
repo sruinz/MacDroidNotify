@@ -20,6 +20,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -46,6 +47,7 @@ class MainActivity : Activity() {
     private lateinit var statusTitle: TextView
     private lateinit var statusDetail: TextView
     private lateinit var pairingSummary: TextView
+    private lateinit var autoStartCheckBox: CheckBox
 
     private val refreshRunnable = object : Runnable {
         override fun run() {
@@ -153,6 +155,8 @@ class MainActivity : Activity() {
         root.addView(button("QR로 페어링") { scanPairingQr() }, spacedLayout())
         root.addView(button("서비스 시작") { requestNotificationPermissionThenStart() }, compactLayout())
         root.addView(button("서비스 중지") { ConnectionService.stop(this) }, compactLayout())
+        autoStartCheckBox = autoStartOption(saved)
+        root.addView(autoStartCheckBox, compactLayout())
         root.addView(button("핑 테스트") { ConnectionService.sendPing(this) }, compactLayout())
         root.addView(button("테스트 알림 보내기") { ConnectionService.sendTestNotification(this) }, compactLayout())
         root.addView(button("디버그 로그 복사") { copyDebugLog() }, compactLayout())
@@ -242,7 +246,7 @@ class MainActivity : Activity() {
             tlsFingerprint = tlsFingerprintInput.text.toString().trim(),
         )
         if (!pairing.isComplete()) {
-            statusStore.save(ConnectionStatusSnapshot(ConnectionPhase.PAIRING_REQUIRED, "0.2.0 보안 QR 또는 v2 수동 값을 입력하세요."))
+            statusStore.save(ConnectionStatusSnapshot(ConnectionPhase.PAIRING_REQUIRED, "보안 QR 또는 v2 수동 값을 입력하세요."))
             refreshStatus()
             toast("페어링 정보가 올바르지 않습니다.")
             return
@@ -274,8 +278,8 @@ class MainActivity : Activity() {
                 val pairing = PairingUriParser.parse(barcode.rawValue)
                 if (pairing == null) {
                     debugLogStore.append("activity qr rejected length=${barcode.rawValue?.length ?: 0}")
-                    statusStore.save(ConnectionStatusSnapshot(ConnectionPhase.PAIRING_REQUIRED, "0.2.0 보안 페어링 QR이 아닙니다."))
-                    toast("0.2.0 보안 페어링 QR이 아닙니다.")
+                    statusStore.save(ConnectionStatusSnapshot(ConnectionPhase.PAIRING_REQUIRED, "보안 페어링 QR이 아닙니다."))
+                    toast("보안 페어링 QR이 아닙니다.")
                 } else {
                     debugLogStore.append("activity qr saved host=${pairing.host}:${pairing.port}")
                     config.save(pairing)
@@ -296,7 +300,7 @@ class MainActivity : Activity() {
 
     private fun requestNotificationPermissionThenStart() {
         if (!config.load().isComplete()) {
-            statusStore.save(ConnectionStatusSnapshot(ConnectionPhase.PAIRING_REQUIRED, "먼저 Mac의 0.2.0 QR을 스캔하세요."))
+            statusStore.save(ConnectionStatusSnapshot(ConnectionPhase.PAIRING_REQUIRED, "먼저 Mac의 보안 페어링 QR을 스캔하세요."))
             refreshStatus()
             toast("먼저 QR로 페어링하세요.")
             return
@@ -361,9 +365,25 @@ class MainActivity : Activity() {
         statusDetail.text = status.description
         val notificationAccess = NotificationAccess.statusText(this)
         pairingSummary.text = if (pairing.isComplete()) {
-            "페어링 정보: ${pairing.host}:${pairing.port}\nMac ID: ${pairing.macId}\n알림 접근: $notificationAccess"
+            "페어링 정보: ${pairing.host}:${pairing.port}\nMac ID: ${pairing.macId}\n알림 접근: $notificationAccess\n재부팅 후 자동 시작: ${if (pairing.autoStartEnabled) "켜짐" else "꺼짐"}"
         } else {
-            "페어링 정보 없음\n알림 접근: $notificationAccess"
+            "페어링 정보 없음\n알림 접근: $notificationAccess\n재부팅 후 자동 시작: ${if (pairing.autoStartEnabled) "켜짐" else "꺼짐"}"
+        }
+    }
+
+    private fun autoStartOption(saved: PairingConfig): CheckBox {
+        return CheckBox(this).apply {
+            text = "기기 재부팅 후 자동 시작"
+            textSize = 15f
+            setTextColor(TEXT_PRIMARY)
+            buttonTintList = ColorStateList.valueOf(ACCENT)
+            isChecked = saved.autoStartEnabled
+            setOnCheckedChangeListener { _, isChecked ->
+                config.setAutoStartEnabled(isChecked)
+                debugLogStore.append("activity auto start option enabled=$isChecked")
+                refreshStatus()
+                toast(if (isChecked) "재부팅 후 자동 시작을 켰습니다." else "재부팅 후 자동 시작을 껐습니다.")
+            }
         }
     }
 

@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -58,7 +59,7 @@ class ConnectionService : Service(), NetworkClient.Listener {
             ConnectionStatusSnapshot(ConnectionPhase.PAIRING_REQUIRED, "먼저 Mac의 QR을 스캔하세요.")
         }
         statusStore.save(initialStatus)
-        startForeground(NOTIFICATION_ID, foregroundNotification(initialStatus))
+        startAsForeground(initialStatus)
         handler.post(reconnectRunnable)
         handler.postDelayed(healthRunnable, HEALTH_INTERVAL_MS)
     }
@@ -157,7 +158,7 @@ class ConnectionService : Service(), NetworkClient.Listener {
         val config = configStore.load()
         if (!config.isComplete()) {
             debugLogStore.append("service ensureClient pairing missing")
-            updateStatus(ConnectionStatusSnapshot(ConnectionPhase.PAIRING_REQUIRED, "먼저 Mac의 0.2.0 QR을 스캔하세요."))
+            updateStatus(ConnectionStatusSnapshot(ConnectionPhase.PAIRING_REQUIRED, "먼저 Mac의 보안 페어링 QR을 스캔하세요."))
             return
         }
         if (client?.isRunning == true) {
@@ -346,6 +347,19 @@ class ConnectionService : Service(), NetworkClient.Listener {
         statusStore.save(snapshot)
         val manager = getSystemService(NotificationManager::class.java)
         manager.notify(NOTIFICATION_ID, foregroundNotification(snapshot))
+    }
+
+    private fun startAsForeground(snapshot: ConnectionStatusSnapshot) {
+        val notification = foregroundNotification(snapshot)
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING,
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
     }
 
     private fun showMacClipboardNotification(text: String) {

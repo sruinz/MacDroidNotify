@@ -77,6 +77,7 @@ class DebugLogStore(private val storage: DebugLogStorage) {
             appendLine("macId=${config.macId.ifBlank { "(empty)" }}")
             appendLine("tlsFingerprint=${maskFingerprint(config.tlsFingerprint)}")
             appendLine("serviceEnabled=${config.serviceEnabled}")
+            appendLine("autoStartEnabled=${config.autoStartEnabled}")
             appendLine("lastDiscovery=${storage.readLastDiscovery().orEmpty().ifBlank { "(none)" }}")
             appendLine("deviceId=${config.deviceId.ifBlank { "(empty)" }}")
             appendLine("deviceName=${config.deviceName.ifBlank { "(empty)" }}")

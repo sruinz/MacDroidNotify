@@ -80,9 +80,9 @@ cat > "$MAC_APP_DEST/Contents/Info.plist" <<'EOF'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.2.0</string>
+  <string>0.2.1</string>
   <key>CFBundleVersion</key>
-  <string>3</string>
+  <string>4</string>
   <key>LSMinimumSystemVersion</key>
   <string>15.0</string>
   <key>LSUIElement</key>
@@ -127,7 +127,7 @@ MacDroid Notify 테스트 산출물
    - Mac 메뉴 막대에서 "Mac 알림 상태 확인"과 "Mac 테스트 알림 보내기"로 macOS 알림 권한을 확인합니다.
    - "핑 테스트"와 "테스트 알림 보내기"로 연결과 macOS 알림 표시를 확인합니다.
 
-주의: 이 테스트 빌드는 같은 Wi-Fi 안에서만 동작하며, 0.2.0부터 Mac 자체 인증서 기반 TLS와 QR fingerprint pinning을 사용합니다.
+주의: 이 테스트 빌드는 같은 Wi-Fi 안에서만 동작하며, 0.2.x 보안 페어링은 Mac 자체 인증서 기반 TLS와 QR fingerprint pinning을 사용합니다.
 EOF
 
 print_plan

@@ -14,6 +14,7 @@ data class PairingConfig(
     val macId: String = "",
     val tlsFingerprint: String = "",
     val serviceEnabled: Boolean = false,
+    val autoStartEnabled: Boolean = false,
 ) {
     fun isComplete(): Boolean =
         host.isNotBlank() &&
@@ -95,6 +96,7 @@ class AppConfig(context: Context) {
             macId = prefs.getString("mac_id", "").orEmpty(),
             tlsFingerprint = prefs.getString("tls_fingerprint", "").orEmpty(),
             serviceEnabled = prefs.getBoolean("service_enabled", false),
+            autoStartEnabled = prefs.getBoolean("auto_start_enabled", false),
         )
     }
 
@@ -121,5 +123,9 @@ class AppConfig(context: Context) {
 
     fun setServiceEnabled(enabled: Boolean) {
         prefs.edit().putBoolean("service_enabled", enabled).apply()
+    }
+
+    fun setAutoStartEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("auto_start_enabled", enabled).apply()
     }
 }

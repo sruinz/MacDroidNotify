@@ -3,11 +3,11 @@ set -eu
 
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 OUTPUT="$("$ROOT_DIR/scripts/prepare-github-upload.sh" --dry-run)"
-SNAPSHOT_DIR="$ROOT_DIR/artifacts/github-upload/MacDroidNotify-0.2.0"
+SNAPSHOT_DIR="$ROOT_DIR/artifacts/github-upload/MacDroidNotify-0.2.1"
 RELEASE_DIR="$ROOT_DIR/artifacts/release-binaries"
 
 case "$OUTPUT" in
-  *"GitHub source snapshot:"*"artifacts/github-upload/MacDroidNotify-0.2.0"*) ;;
+  *"GitHub source snapshot:"*"artifacts/github-upload/MacDroidNotify-0.2.1"*) ;;
   *)
     echo "Expected GitHub upload destination in dry-run output" >&2
     echo "$OUTPUT" >&2
@@ -69,12 +69,12 @@ if find "$SNAPSHOT_DIR" -name local.properties -o -name .git -o -name .android-s
   exit 1
 fi
 
-if [ ! -f "$RELEASE_DIR/MacDroidNotify-android-0.2.0.apk" ]; then
+if [ ! -f "$RELEASE_DIR/MacDroidNotify-android-0.2.1.apk" ]; then
   echo "Expected release Android APK from GitHub upload preparation" >&2
   exit 1
 fi
 
-if [ ! -f "$RELEASE_DIR/MacDroidNotify-mac-0.2.0.zip" ]; then
+if [ ! -f "$RELEASE_DIR/MacDroidNotify-mac-0.2.1.zip" ]; then
   echo "Expected release Mac app zip from GitHub upload preparation" >&2
   exit 1
 fi

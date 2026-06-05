@@ -212,6 +212,27 @@ class ProtocolCodecTest {
     }
 
     @Test
+    fun autoStartPolicyStartsOnlyForEnabledCompletePairingOnBootOrUpdate() {
+        val complete = PairingConfig(
+            host = "192.168.0.2",
+            port = 47655,
+            token = "token",
+            deviceId = "device",
+            deviceName = "Android Phone",
+            macId = "mac-1",
+            tlsFingerprint = "AABBCCDDEEFF00112233445566778899AABBCCDDEEFF00112233445566778899",
+            serviceEnabled = true,
+            autoStartEnabled = true,
+        )
+
+        assertEquals(true, AutoStartPolicy.shouldStart(complete, AutoStartPolicy.ACTION_BOOT_COMPLETED))
+        assertEquals(true, AutoStartPolicy.shouldStart(complete, AutoStartPolicy.ACTION_MY_PACKAGE_REPLACED))
+        assertEquals(false, AutoStartPolicy.shouldStart(complete.copy(autoStartEnabled = false), AutoStartPolicy.ACTION_BOOT_COMPLETED))
+        assertEquals(false, AutoStartPolicy.shouldStart(complete.copy(macId = ""), AutoStartPolicy.ACTION_BOOT_COMPLETED))
+        assertEquals(false, AutoStartPolicy.shouldStart(complete, "android.intent.action.TIME_SET"))
+    }
+
+    @Test
     fun tlsFingerprintNormalizesAndValidatesSha256Hex() {
         val value = "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99"
 
