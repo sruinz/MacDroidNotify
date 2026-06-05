@@ -1,0 +1,15 @@
+.DS_Store
+.build/
+.gradle/
+.android-sdk/
+build/
+android-app/build/
+captures/
+local.properties
+artifacts/test-builds/
+artifacts/github-upload/
+*.iml
+*.apk
+*.aab
+*.keystore
+*.jks

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MacDroid Notify</string>
+    <string name="tile_send_clipboard">Mac으로 클립보드 보내기</string>
+</resources>
