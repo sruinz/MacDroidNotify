@@ -8,6 +8,8 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -161,6 +163,10 @@ class ConnectionService : Service(), NetworkClient.Listener {
             updateStatus(ConnectionStatusSnapshot(ConnectionPhase.PAIRING_REQUIRED, "먼저 Mac의 보안 페어링 QR을 스캔하세요."))
             return
         }
+        if (!ConnectionPolicy.shouldAttemptConnection(hasWifiTransport())) {
+            waitForWifi()
+            return
+        }
         if (client?.isRunning == true) {
             debugLogStore.append("service ensureClient skipped client=${clientState()}")
             return
@@ -206,6 +212,31 @@ class ConnectionService : Service(), NetworkClient.Listener {
         debugLogStore.append("service ensureClient new tls client host=${config.host}:${config.port}")
         updateStatus(ConnectionStatusSnapshot(ConnectionPhase.CONNECTING, "${config.host}:${config.port} TLS 연결 중"))
         client = NetworkClient(config, this).also { it.start() }
+    }
+
+    private fun waitForWifi() {
+        val shouldCloseCurrentWork = discoveryRunning || client?.isRunning == true
+        if (shouldCloseCurrentWork) {
+            debugLogStore.append("service connection paused wifi only")
+            clearHealthPing()
+            discovery?.stop()
+            discoveryRunning = false
+            client?.close()
+            client = null
+        }
+
+        val current = statusStore.load()
+        if (current.phase != ConnectionPhase.WAITING_FOR_WIFI) {
+            debugLogStore.append("service waiting for wifi")
+            updateStatus(ConnectionStatusSnapshot(ConnectionPhase.WAITING_FOR_WIFI, "Wi-Fi 연결을 기다리는 중입니다."))
+        }
+    }
+
+    private fun hasWifiTransport(): Boolean {
+        val manager = getSystemService(ConnectivityManager::class.java) ?: return false
+        val network = manager.activeNetwork ?: return false
+        val capabilities = manager.getNetworkCapabilities(network) ?: return false
+        return capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
     }
 
     private fun runHealthCheck() {
@@ -516,6 +547,11 @@ class ConnectionService : Service(), NetworkClient.Listener {
         }
 
         fun sendNotification(context: Context, payload: NotificationPayload) {
+            val config = AppConfig(context).load()
+            if (!NotificationMirrorPolicy.shouldForwardNotification(config.serviceEnabled)) {
+                DebugLogStore(context).append("listener ignored service disabled package=${payload.packageName}")
+                return
+            }
             val intent = Intent(context, ConnectionService::class.java)
                 .setAction(ACTION_SEND_NOTIFICATION)
                 .putExtra(EXTRA_NOTIFICATION_ID, payload.id)

@@ -34,10 +34,16 @@ esac
 
 if [ -d "$MAC_APP" ]; then
   BUNDLE_ID="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$MAC_APP/Contents/Info.plist")"
+  BUNDLE_VERSION="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$MAC_APP/Contents/Info.plist")"
+  EXECUTABLE_VERSION="$(strings "$MAC_APP/Contents/MacOS/MacDroidNotifyMac" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | tail -1)"
   ICON_FILE="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIconFile" "$MAC_APP/Contents/Info.plist")"
   ICON_NAME="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIconName" "$MAC_APP/Contents/Info.plist" 2>/dev/null || echo "없음")"
   if [ "$BUNDLE_ID" != "dev.svrx.macdroidnotify.app" ]; then
     echo "Expected CFBundleIdentifier=dev.svrx.macdroidnotify.app, got $BUNDLE_ID" >&2
+    exit 1
+  fi
+  if [ "$EXECUTABLE_VERSION" != "$BUNDLE_VERSION" ]; then
+    echo "Expected executable version $BUNDLE_VERSION, got $EXECUTABLE_VERSION" >&2
     exit 1
   fi
   if [ "$ICON_FILE" != "MacDroidNotify" ]; then

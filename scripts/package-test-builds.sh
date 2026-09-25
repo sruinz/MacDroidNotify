@@ -7,7 +7,8 @@ ANDROID_DEST="$ARTIFACT_DIR/android/MacDroidNotify-debug.apk"
 MAC_APP_DEST="$ARTIFACT_DIR/mac/MacDroid Notify.app"
 MAC_ASSET_CATALOG="$ARTIFACT_DIR/mac/MacDroidNotify.xcassets"
 MAC_ASSET_INFO="$ARTIFACT_DIR/mac/asset-info.plist"
-MAC_EXECUTABLE="$ROOT_DIR/.build/arm64-apple-macosx/debug/MacDroidNotifyMac"
+MAC_BIN_DIR="$(swift build --show-bin-path)"
+MAC_EXECUTABLE="$MAC_BIN_DIR/MacDroidNotifyMac"
 ANDROID_APK="$ROOT_DIR/android-app/build/outputs/apk/debug/android-app-debug.apk"
 DRY_RUN=0
 
@@ -35,6 +36,11 @@ case "$ARTIFACT_DIR" in
     exit 1
     ;;
 esac
+
+if [ ! -f "$MAC_EXECUTABLE" ]; then
+  echo "Swift executable not found: $MAC_EXECUTABLE" >&2
+  exit 1
+fi
 
 SWIFTPM_CACHE_PATH="${SWIFTPM_CACHE_PATH:-/private/tmp/macdroid-swiftpm-cache}" \
 CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/private/tmp/macdroid-clang-cache}" \
@@ -80,9 +86,9 @@ cat > "$MAC_APP_DEST/Contents/Info.plist" <<'EOF'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.2.1</string>
+  <string>0.2.2</string>
   <key>CFBundleVersion</key>
-  <string>4</string>
+  <string>5</string>
   <key>LSMinimumSystemVersion</key>
   <string>15.0</string>
   <key>LSUIElement</key>

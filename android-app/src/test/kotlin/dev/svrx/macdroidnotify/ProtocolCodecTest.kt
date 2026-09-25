@@ -227,9 +227,22 @@ class ProtocolCodecTest {
 
         assertEquals(true, AutoStartPolicy.shouldStart(complete, AutoStartPolicy.ACTION_BOOT_COMPLETED))
         assertEquals(true, AutoStartPolicy.shouldStart(complete, AutoStartPolicy.ACTION_MY_PACKAGE_REPLACED))
+        assertEquals(false, AutoStartPolicy.shouldStart(complete.copy(serviceEnabled = false), AutoStartPolicy.ACTION_BOOT_COMPLETED))
         assertEquals(false, AutoStartPolicy.shouldStart(complete.copy(autoStartEnabled = false), AutoStartPolicy.ACTION_BOOT_COMPLETED))
         assertEquals(false, AutoStartPolicy.shouldStart(complete.copy(macId = ""), AutoStartPolicy.ACTION_BOOT_COMPLETED))
         assertEquals(false, AutoStartPolicy.shouldStart(complete, "android.intent.action.TIME_SET"))
+    }
+
+    @Test
+    fun mirrorPolicyDoesNotRestartStoppedService() {
+        assertEquals(true, NotificationMirrorPolicy.shouldForwardNotification(serviceEnabled = true))
+        assertEquals(false, NotificationMirrorPolicy.shouldForwardNotification(serviceEnabled = false))
+    }
+
+    @Test
+    fun connectionPolicyAttemptsConnectionOnlyOnWifi() {
+        assertEquals(true, ConnectionPolicy.shouldAttemptConnection(hasWifiTransport = true))
+        assertEquals(false, ConnectionPolicy.shouldAttemptConnection(hasWifiTransport = false))
     }
 
     @Test

@@ -7,6 +7,7 @@ enum class ConnectionPhase {
     IDLE,
     PAIRING_REQUIRED,
     DISCOVERING,
+    WAITING_FOR_WIFI,
     CONNECTING,
     CONNECTED,
     TLS_FAILED,
@@ -26,6 +27,7 @@ data class ConnectionStatusSnapshot(
             ConnectionPhase.IDLE -> "대기 중"
             ConnectionPhase.PAIRING_REQUIRED -> "페어링 필요"
             ConnectionPhase.DISCOVERING -> "Mac 탐색 중"
+            ConnectionPhase.WAITING_FOR_WIFI -> "Wi-Fi 대기 중"
             ConnectionPhase.CONNECTING -> "연결 중"
             ConnectionPhase.CONNECTED -> "연결됨"
             ConnectionPhase.TLS_FAILED -> "TLS 실패"

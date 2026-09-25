@@ -2,7 +2,7 @@
 
 개인용 Android ↔ Mac 알림 및 클립보드 브리지입니다.
 
-- 현재 버전: `0.2.1`
+- 현재 버전: `0.2.2`
 - Android 앱 ID: `dev.svrx.macdroidnotify`
 - macOS 번들 ID: `dev.svrx.macdroidnotify.app`
 - 라이선스: MIT
@@ -15,6 +15,7 @@
 - 같은 Wi-Fi에서 Mac IP나 포트가 바뀌어도 Bonjour/mDNS로 기존 Mac을 다시 찾습니다.
 - 첫 페어링 성공 후 Mac 로그인 시 자동 실행을 기본으로 켜고, 메뉴에서 끌 수 있습니다.
 - Android 앱을 다시 열면 이전에 켜둔 서비스가 자동으로 다시 연결을 시도하고, Android 앱의 옵션을 켜면 기기 재부팅 후에도 자동 시작합니다.
+- Android 앱은 Wi-Fi 연결일 때만 네트워크 재연결을 시도하고, 모바일 데이터에서는 시도하지 않습니다.
 - Android 앱에서 연결 상태, 핑 RTT, 테스트 알림 전송 결과를 확인합니다.
 - Mac 메뉴 막대에서 Mac 텍스트 클립보드를 Android로 보냅니다.
 - Android 앱 또는 빠른 설정 타일에서 Android 텍스트 클립보드를 Mac으로 보냅니다.
@@ -47,7 +48,7 @@
 6. `테스트 알림 보내기`로 Mac 알림 표시가 되는지 확인합니다.
 7. 이후 Android에 도착한 알림이 Mac 알림 센터에 표시됩니다.
 
-현재 0.2.1은 개인 사용을 기준으로 만든 초기 버전입니다. 범용 스토어 배포는 제공하지 않습니다.
+현재 0.2.2는 개인 사용을 기준으로 만든 초기 버전입니다. 범용 스토어 배포는 제공하지 않습니다.
 
 ## 소스에서 직접 빌드
 
@@ -98,8 +99,8 @@ JAVA_HOME=/opt/homebrew/opt/openjdk scripts/prepare-release-binaries.sh
 결과는 `artifacts/release-binaries/`에 생성됩니다.
 
 ```text
-MacDroidNotify-android-0.2.1.apk
-MacDroidNotify-mac-0.2.1.zip
+MacDroidNotify-android-0.2.2.apk
+MacDroidNotify-mac-0.2.2.zip
 SHA256SUMS.txt
 ```
 
@@ -113,7 +114,13 @@ Android 앱의 `상시 알림 설정` 버튼에서 이 채널 설정을 바로 �
 
 Android 앱에서 `기기 재부팅 후 자동 시작`을 체크하고 페어링 정보가 유지되어 있으면, 기기 재부팅 후 MacDroid Notify가 자동으로 foreground service를 다시 시작합니다. `서비스 시작/서비스 중지`는 현재 연결을 켜고 끄는 버튼이고, 재부팅 후 자동 시작 여부는 이 체크박스가 따로 제어합니다.
 
+재부팅 자동 시작은 마지막 상태가 `서비스 시작`일 때만 동작합니다. `서비스 중지`를 누른 상태에서는 Android 알림이 들어와도 서비스를 다시 시작하지 않습니다.
+
 자동 시작은 Android의 `BOOT_COMPLETED`와 앱 업데이트 후 `MY_PACKAGE_REPLACED` 이벤트에서 동작합니다. 제조사 배터리 관리가 강하면 재부팅 직후 시작이 늦거나 막힐 수 있으므로, 안정적으로 쓰려면 배터리 설정에서 이 앱을 제한하지 않도록 두는 것이 좋습니다.
+
+## 네트워크 제한
+
+Wi-Fi가 꺼져 있거나 모바일 데이터만 사용 중일 때는 mDNS 탐색과 Mac TCP 연결을 시도하지 않고 `Wi-Fi 대기 중` 상태를 유지합니다. 이 앱은 공인 주소나 클라우드 릴레이를 사용하지 않기 때문에 외부 인터넷만 있을 때는 Mac에 연결될 수 없습니다.
 
 ## 클립보드 사용
 
