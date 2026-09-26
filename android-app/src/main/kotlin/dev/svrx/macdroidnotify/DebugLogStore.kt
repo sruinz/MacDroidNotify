@@ -9,6 +9,8 @@ import java.util.Locale
 interface DebugLogStorage {
     fun readLinesJson(): String?
     fun writeLinesJson(value: String)
+    fun readLifecycleLinesJson(): String?
+    fun writeLifecycleLinesJson(value: String)
     fun readLastDiscovery(): String?
     fun writeLastDiscovery(value: String)
 }
@@ -20,6 +22,14 @@ class InMemoryDebugLogStorage : DebugLogStorage {
 
     override fun writeLinesJson(value: String) {
         this.value = value
+    }
+
+    private var lifecycleValue: String? = null
+
+    override fun readLifecycleLinesJson(): String? = lifecycleValue
+
+    override fun writeLifecycleLinesJson(value: String) {
+        lifecycleValue = value
     }
 
     private var lastDiscovery: String? = null
@@ -40,6 +50,12 @@ private class SharedPreferencesDebugLogStorage(context: Context) : DebugLogStora
         prefs.edit().putString(KEY, value).apply()
     }
 
+    override fun readLifecycleLinesJson(): String? = prefs.getString(KEY_LIFECYCLE, null)
+
+    override fun writeLifecycleLinesJson(value: String) {
+        prefs.edit().putString(KEY_LIFECYCLE, value).commit()
+    }
+
     override fun readLastDiscovery(): String? = prefs.getString(KEY_LAST_DISCOVERY, null)
 
     override fun writeLastDiscovery(value: String) {
@@ -48,6 +64,7 @@ private class SharedPreferencesDebugLogStorage(context: Context) : DebugLogStora
 
     private companion object {
         const val KEY = "debug_lines_json"
+        const val KEY_LIFECYCLE = "lifecycle_lines_json"
         const val KEY_LAST_DISCOVERY = "last_discovery"
     }
 }
@@ -56,10 +73,11 @@ class DebugLogStore(private val storage: DebugLogStorage) {
     constructor(context: Context) : this(SharedPreferencesDebugLogStorage(context))
 
     fun append(message: String, nowMillis: Long = System.currentTimeMillis()) {
-        val lines = readLines().toMutableList()
-        lines += "${formatTime(nowMillis)} $message"
-        val trimmed = lines.takeLast(MAX_LINES)
-        storage.writeLinesJson(JSONArray(trimmed).toString())
+        appendTo(::readLines, storage::writeLinesJson, message, nowMillis, MAX_LINES)
+    }
+
+    fun appendLifecycle(message: String, nowMillis: Long = System.currentTimeMillis()) {
+        appendTo(::readLifecycleLines, storage::writeLifecycleLinesJson, message, nowMillis, MAX_LIFECYCLE_LINES)
     }
 
     fun setLastDiscovery(value: String) {
@@ -81,13 +99,35 @@ class DebugLogStore(private val storage: DebugLogStorage) {
             appendLine("lastDiscovery=${storage.readLastDiscovery().orEmpty().ifBlank { "(none)" }}")
             appendLine("deviceId=${config.deviceId.ifBlank { "(empty)" }}")
             appendLine("deviceName=${config.deviceName.ifBlank { "(empty)" }}")
+            appendLine("lifecycle logs:")
+            readLifecycleLines().forEach { appendLine(it) }
             appendLine("logs:")
             readLines().forEach { appendLine(it) }
         }.trimEnd()
     }
 
+    private fun appendTo(
+        read: () -> List<String>,
+        write: (String) -> Unit,
+        message: String,
+        nowMillis: Long,
+        maxLines: Int,
+    ) {
+        val lines = read().toMutableList()
+        lines += "${formatTime(nowMillis)} $message"
+        write(JSONArray(lines.takeLast(maxLines)).toString())
+    }
+
     private fun readLines(): List<String> {
-        val raw = storage.readLinesJson() ?: return emptyList()
+        return readLinesFrom(storage.readLinesJson())
+    }
+
+    private fun readLifecycleLines(): List<String> {
+        return readLinesFrom(storage.readLifecycleLinesJson())
+    }
+
+    private fun readLinesFrom(raw: String?): List<String> {
+        val raw = raw ?: return emptyList()
         return try {
             val json = JSONArray(raw)
             List(json.length()) { index -> json.optString(index) }
@@ -115,5 +155,6 @@ class DebugLogStore(private val storage: DebugLogStorage) {
 
     private companion object {
         const val MAX_LINES = 120
+        const val MAX_LIFECYCLE_LINES = 80
     }
 }

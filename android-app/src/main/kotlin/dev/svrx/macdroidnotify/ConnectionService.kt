@@ -13,6 +13,8 @@ import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
+import android.os.Process
+import android.os.SystemClock
 import android.os.Looper
 import android.widget.Toast
 
@@ -26,6 +28,12 @@ class ConnectionService : Service(), NetworkClient.Listener {
     private var discovery: MacDiscovery? = null
     private var discoveryRunning = false
     private val healthPingTracker = HealthPingTracker(HEALTH_TIMEOUT_MS)
+    private val reconnectSchedule = ReconnectSchedule(
+        baseDelayMillis = RECONNECT_DELAY_MS,
+        maxDelayMillis = MAX_RECONNECT_DELAY_MS,
+    )
+    private val outboundWorkQueue = OutboundWorkQueue()
+    private var macConnected = false
 
     private val reconnectRunnable = object : Runnable {
         override fun run() {
@@ -54,6 +62,7 @@ class ConnectionService : Service(), NetworkClient.Listener {
         debugLogStore = DebugLogStore(this)
         ensureNotificationChannel(this)
         debugLogStore.append("service onCreate")
+        appendServiceLifecycle("create")
 
         val initialStatus = if (configStore.load().isComplete()) {
             ConnectionStatusSnapshot(ConnectionPhase.CONNECTING, "Mac 연결을 준비 중입니다.")
@@ -68,6 +77,7 @@ class ConnectionService : Service(), NetworkClient.Listener {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         debugLogStore.append("service onStart action=${intent?.action ?: "start"} client=${clientState()}")
+        appendServiceLifecycle("start action=${intent?.action ?: "start"} startId=$startId flags=$flags")
         when (intent?.action) {
             ACTION_STOP -> {
                 debugLogStore.append("service stop requested")
@@ -75,14 +85,26 @@ class ConnectionService : Service(), NetworkClient.Listener {
                 stopSelf()
                 return START_NOT_STICKY
             }
+            ACTION_START -> {
+                reconnectSchedule.wake()
+                ensureClient()
+            }
             ACTION_SEND_CLIPBOARD -> {
+                wakeForOutboundWork()
                 intent.getStringExtra(EXTRA_TEXT)?.let { sendClipboard(it) }
             }
             ACTION_SEND_NOTIFICATION -> {
+                wakeForOutboundWork()
                 notificationFromIntent(intent)?.let { sendNotification(it) }
             }
-            ACTION_SEND_PING -> sendPing()
-            ACTION_SEND_TEST_NOTIFICATION -> sendTestNotification()
+            ACTION_SEND_PING -> {
+                wakeForOutboundWork()
+                sendPing()
+            }
+            ACTION_SEND_TEST_NOTIFICATION -> {
+                wakeForOutboundWork()
+                sendTestNotification()
+            }
             else -> ensureClient()
         }
         return START_STICKY
@@ -90,24 +112,56 @@ class ConnectionService : Service(), NetworkClient.Listener {
 
     override fun onDestroy() {
         debugLogStore.append("service onDestroy")
+        appendServiceLifecycle("destroy")
         handler.removeCallbacks(reconnectRunnable)
         handler.removeCallbacks(healthRunnable)
         handler.removeCallbacks(healthTimeoutRunnable)
         discovery?.stop()
         client?.close()
         client = null
+        macConnected = false
         super.onDestroy()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        appendServiceLifecycle("task removed action=${rootIntent?.action.orEmpty()}")
+        super.onTaskRemoved(rootIntent)
+    }
+
+    override fun onTimeout(startId: Int) {
+        appendServiceLifecycle("timeout startId=$startId")
+        super.onTimeout(startId)
+    }
+
+    override fun onTimeout(fgsType: Int, startId: Int) {
+        appendServiceLifecycle("timeout fgsType=$fgsType startId=$startId")
+        super.onTimeout(fgsType, startId)
+    }
+
+    override fun onTrimMemory(level: Int) {
+        appendServiceLifecycle("trim memory level=$level")
+        super.onTrimMemory(level)
+    }
+
+    override fun onLowMemory() {
+        appendServiceLifecycle("low memory")
+        super.onLowMemory()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onConnected(macName: String) {
         lastMacName = macName.ifBlank { "Mac" }
+        macConnected = true
+        reconnectSchedule.recordSuccess()
         debugLogStore.append("service connected mac=$lastMacName")
         updateStatus(ConnectionStatusSnapshot(ConnectionPhase.CONNECTED, "$lastMacName 연결됨"))
+        handler.post { flushOutboundWork() }
     }
 
     override fun onDisconnected(reason: String) {
+        macConnected = false
+        reconnectSchedule.recordFailure()
         debugLogStore.append("service disconnected reason=$reason")
         client = null
         val phase = when {
@@ -119,7 +173,16 @@ class ConnectionService : Service(), NetworkClient.Listener {
             else -> ConnectionPhase.RECONNECT_WAITING
         }
         val displayReason = if (reason == "Disconnected") "연결이 끊어졌습니다. 재연결을 기다립니다." else reason
-        updateStatus(ConnectionStatusSnapshot(phase, displayReason))
+        updateStatus(
+            ConnectionStatusSnapshot(
+                phase,
+                if (phase == ConnectionPhase.RECONNECT_WAITING && reconnectSchedule.isExhausted()) {
+                    "Mac이 응답하지 않습니다. 다음 알림이나 작업이 있을 때 다시 시도합니다."
+                } else {
+                    displayReason
+                },
+            ),
+        )
         clearHealthPing()
         handler.post { requestReconnect("disconnect") }
     }
@@ -167,6 +230,7 @@ class ConnectionService : Service(), NetworkClient.Listener {
             waitForWifi()
             return
         }
+        if (!reconnectSchedule.canAttempt()) return
         if (client?.isRunning == true) {
             debugLogStore.append("service ensureClient skipped client=${clientState()}")
             return
@@ -209,6 +273,7 @@ class ConnectionService : Service(), NetworkClient.Listener {
     }
 
     private fun connect(config: PairingConfig) {
+        macConnected = false
         debugLogStore.append("service ensureClient new tls client host=${config.host}:${config.port}")
         updateStatus(ConnectionStatusSnapshot(ConnectionPhase.CONNECTING, "${config.host}:${config.port} TLS 연결 중"))
         client = NetworkClient(config, this).also { it.start() }
@@ -223,6 +288,7 @@ class ConnectionService : Service(), NetworkClient.Listener {
             discoveryRunning = false
             client?.close()
             client = null
+            macConnected = false
         }
 
         val current = statusStore.load()
@@ -264,10 +330,12 @@ class ConnectionService : Service(), NetworkClient.Listener {
     private fun handleHealthTimeout() {
         val currentClient = client ?: return
         val timedOutId = healthPingTracker.timedOut(System.currentTimeMillis()) ?: return
+        reconnectSchedule.recordFailure()
         debugLogStore.append("health timeout id=$timedOutId")
         clearHealthPing()
         currentClient.close()
         client = null
+        macConnected = false
         updateStatus(ConnectionStatusSnapshot(ConnectionPhase.RECONNECT_WAITING, "Mac 응답이 없어 재연결을 준비합니다."))
         requestReconnect("health timeout")
     }
@@ -293,13 +361,8 @@ class ConnectionService : Service(), NetworkClient.Listener {
     private fun sendClipboard(text: String) {
         try {
             ProtocolCodec.requireClipboardText(text)
-            if (client?.sendClipboard(text) == true) {
-                handler.post {
-                    Toast.makeText(this, "클립보드를 Mac으로 보냈습니다.", Toast.LENGTH_SHORT).show()
-                }
-            } else {
-                showDisconnectedToast()
-            }
+            outboundWorkQueue.enqueue(OutboundWork.Clipboard(text))
+            flushOutboundWork()
         } catch (error: IllegalArgumentException) {
             handler.post {
                 Toast.makeText(this, error.message ?: "클립보드가 너무 큽니다.", Toast.LENGTH_SHORT).show()
@@ -312,25 +375,92 @@ class ConnectionService : Service(), NetworkClient.Listener {
             "service notification requested package=${payload.packageName} app=${payload.appName} " +
                 "titleLen=${payload.title.length} textLen=${payload.text.length} client=${clientState()}",
         )
-        if (client?.sendNotification(payload) == true) {
-            debugLogStore.append("service notification sent package=${payload.packageName}")
-        } else {
-            markSendFailure("notification")
-        }
+        outboundWorkQueue.enqueue(OutboundWork.Notification(payload))
+        flushOutboundWork()
     }
 
     private fun sendPing() {
         val id = "ping-${System.currentTimeMillis()}"
         debugLogStore.append("service ping requested id=$id client=${clientState()}")
-        if (client?.sendPing(id) == true) {
-            val current = statusStore.load()
-            updateStatus(current.copy(detail = "핑 응답 대기 중"))
-        } else {
-            markSendFailure("ping")
-        }
+        outboundWorkQueue.enqueue(OutboundWork.Ping(id))
+        flushOutboundWork()
     }
 
     private fun sendTestNotification() {
+        outboundWorkQueue.enqueue(OutboundWork.TestNotification)
+        flushOutboundWork()
+    }
+
+    private fun markSendFailure(action: String) {
+        reconnectSchedule.recordFailure()
+        debugLogStore.append("service send failed action=$action client=${clientState()}")
+        clearHealthPing()
+        client?.close()
+        client = null
+        macConnected = false
+        updateStatus(
+            ConnectionStatusSnapshot(
+                ConnectionPhase.RECONNECT_WAITING,
+                if (reconnectSchedule.isExhausted()) {
+                    "Mac이 응답하지 않습니다. 다음 알림이나 작업이 있을 때 다시 시도합니다."
+                } else {
+                    "Mac에 연결되지 않았습니다. 재연결을 준비합니다."
+                },
+            ),
+        )
+        handler.post {
+            Toast.makeText(this, "Mac에 연결되지 않았습니다.", Toast.LENGTH_SHORT).show()
+        }
+        ensureClient()
+    }
+
+    private fun canSendNow(): Boolean {
+        return macConnected && client?.isRunning == true
+    }
+
+    private fun flushOutboundWork() {
+        if (!canSendNow()) return
+        while (true) {
+            val work = outboundWorkQueue.peek() ?: break
+            if (!dispatchOutboundWork(work)) {
+                markSendFailure("queued work")
+                break
+            }
+            outboundWorkQueue.dequeue()
+        }
+    }
+
+    private fun dispatchOutboundWork(work: OutboundWork): Boolean {
+        return when (work) {
+            is OutboundWork.Clipboard -> {
+                val sent = client?.sendClipboard(work.text) == true
+                if (sent) {
+                    handler.post {
+                        Toast.makeText(this, "클립보드를 Mac으로 보냈습니다.", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                sent
+            }
+            is OutboundWork.Notification -> {
+                val sent = client?.sendNotification(work.payload) == true
+                if (sent) {
+                    debugLogStore.append("service notification sent package=${work.payload.packageName}")
+                }
+                sent
+            }
+            is OutboundWork.Ping -> {
+                val sent = client?.sendPing(work.id) == true
+                if (sent) {
+                    val current = statusStore.load()
+                    updateStatus(current.copy(detail = "핑 응답 대기 중"))
+                }
+                sent
+            }
+            OutboundWork.TestNotification -> sendTestNotificationNow()
+        }
+    }
+
+    private fun sendTestNotificationNow(): Boolean {
         val payload = NotificationPayload(
             id = "test-${System.currentTimeMillis()}",
             packageName = packageName,
@@ -339,29 +469,13 @@ class ConnectionService : Service(), NetworkClient.Listener {
             text = "Android에서 보낸 테스트 알림입니다.",
             timestampMillis = System.currentTimeMillis(),
         )
-        if (client?.sendNotification(payload) == true) {
+        val sent = client?.sendNotification(payload) == true
+        if (sent) {
             handler.post {
                 Toast.makeText(this, "테스트 알림을 Mac으로 보냈습니다.", Toast.LENGTH_SHORT).show()
             }
-        } else {
-            markSendFailure("test notification")
         }
-    }
-
-    private fun markSendFailure(action: String) {
-        debugLogStore.append("service send failed action=$action client=${clientState()}")
-        clearHealthPing()
-        client?.close()
-        client = null
-        updateStatus(ConnectionStatusSnapshot(ConnectionPhase.RECONNECT_WAITING, "Mac에 연결되지 않았습니다. 재연결을 준비합니다."))
-        handler.post {
-            Toast.makeText(this, "Mac에 연결되지 않았습니다.", Toast.LENGTH_SHORT).show()
-        }
-        ensureClient()
-    }
-
-    private fun showDisconnectedToast() {
-        markSendFailure("clipboard")
+        return sent
     }
 
     private fun notificationFromIntent(intent: Intent): NotificationPayload? {
@@ -468,12 +582,24 @@ class ConnectionService : Service(), NetworkClient.Listener {
         return "running=${current.isRunning}"
     }
 
+    private fun appendServiceLifecycle(event: String) {
+        debugLogStore.appendLifecycle(
+            "service $event pid=${Process.myPid()} elapsed=${SystemClock.elapsedRealtime()}",
+        )
+    }
+
+    private fun wakeForOutboundWork() {
+        reconnectSchedule.wake()
+        if (client?.isRunning != true) ensureClient()
+    }
+
     companion object {
         const val CHANNEL_ID = "connection_quiet_v2"
         private const val CLIPBOARD_CHANNEL_ID = "clipboard_actions"
         private const val NOTIFICATION_ID = 1001
         private const val CLIPBOARD_NOTIFICATION_ID = 1002
         private const val RECONNECT_DELAY_MS = 5_000L
+        private const val MAX_RECONNECT_DELAY_MS = 30_000L
         private const val HEALTH_INTERVAL_MS = 10_000L
         private const val HEALTH_TIMEOUT_MS = 8_000L
 

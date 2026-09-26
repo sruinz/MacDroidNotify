@@ -27,14 +27,19 @@ class NetworkClient(
     }
 
     private val running = AtomicBoolean(false)
+    private val closed = AtomicBoolean(false)
     private val disconnectNotified = AtomicBoolean(false)
     private val writerLock = Any()
     private val pingSentAtMillis = ConcurrentHashMap<String, Long>()
     private val writerExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "MacDroid-Writer")
     }
-    private var socket: Socket? = null
-    private var writer: BufferedWriter? = null
+    private val closeExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "MacDroid-SocketCloser")
+    }
+
+    @Volatile private var socket: Socket? = null
+    @Volatile private var writer: BufferedWriter? = null
 
     val isRunning: Boolean
         get() = running.get()
@@ -45,11 +50,23 @@ class NetworkClient(
     }
 
     fun close() {
+        if (!closed.compareAndSet(false, true)) return
         running.set(false)
-        socket?.close()
+        val socketToClose = socket
         socket = null
         writer = null
         writerExecutor.shutdownNow()
+        closeExecutor.execute {
+            try {
+                socketToClose?.close()
+            } catch (error: Exception) {
+                listener.onDebugLog(
+                    "network socket close failed ${error.javaClass.simpleName}: ${error.message}",
+                )
+            } finally {
+                closeExecutor.shutdown()
+            }
+        }
     }
 
     fun sendNotification(payload: NotificationPayload): Boolean {

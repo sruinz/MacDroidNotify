@@ -2,6 +2,7 @@ package dev.svrx.macdroidnotify
 
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Test
@@ -10,6 +11,8 @@ import java.security.Principal
 import java.security.PublicKey
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
+import java.net.Socket
+import java.util.concurrent.atomic.AtomicReference
 import java.util.Base64
 import java.util.Date
 import javax.crypto.Mac
@@ -185,6 +188,183 @@ class ProtocolCodecTest {
     }
 
     @Test
+    fun debugLogReportKeepsLifecycleLogsSeparatelyFromNoisyLogs() {
+        val store = DebugLogStore(InMemoryDebugLogStorage())
+        repeat(130) { index ->
+            store.append("event-$index", nowMillis = 1_000L + index)
+        }
+        repeat(85) { index ->
+            store.appendLifecycle("lifecycle-$index", nowMillis = 10_000L + index)
+        }
+
+        val report = store.buildReport(
+            config = PairingConfig(
+                host = "192.168.0.2",
+                port = 47655,
+                token = "token",
+                deviceId = "device",
+                deviceName = "Android Phone",
+                macId = "mac-1",
+                tlsFingerprint = "AABBCCDDEEFF00112233445566778899AABBCCDDEEFF00112233445566778899",
+            ),
+            status = ConnectionStatusSnapshot(ConnectionPhase.FAILED, "send failed"),
+        )
+
+        assertEquals(false, report.contains("event-0"))
+        assertEquals(true, report.contains("event-129"))
+        assertEquals(false, report.contains("lifecycle-0"))
+        assertEquals(true, report.contains("lifecycle-84"))
+    }
+
+    @Test
+    fun crashHandlerRecordsUncaughtExceptionThenDelegatesToPreviousHandler() {
+        val store = DebugLogStore(InMemoryDebugLogStorage())
+        var delegated = false
+        val previous = Thread.UncaughtExceptionHandler { _, _ -> delegated = true }
+        val handler = CrashLogHandler(store, previous)
+        val exception = IllegalStateException("process ended")
+
+        handler.uncaughtException(Thread.currentThread(), exception)
+
+        val report = store.buildReport(
+            config = PairingConfig(
+                host = "192.168.0.2",
+                port = 47655,
+                token = "token",
+                deviceId = "device",
+                deviceName = "Android Phone",
+                macId = "mac-1",
+                tlsFingerprint = "AABBCCDDEEFF00112233445566778899AABBCCDDEEFF00112233445566778899",
+            ),
+            status = ConnectionStatusSnapshot(ConnectionPhase.FAILED, "send failed"),
+        )
+
+        assertEquals(true, report.contains("process crash thread=${Thread.currentThread().name}"))
+        assertEquals(true, report.contains("IllegalStateException: process ended"))
+        assertEquals(true, delegated)
+    }
+
+    @Test
+    fun networkClientClosesSocketAwayFromCallerThread() {
+        val closingThread = AtomicReference<Thread?>(null)
+        val socket = object : Socket() {
+            override fun close() {
+                closingThread.set(Thread.currentThread())
+            }
+        }
+        val client = NetworkClient(
+            PairingConfig(
+                host = "192.168.0.2",
+                port = 47655,
+                token = "token",
+                deviceId = "device",
+                deviceName = "Android Phone",
+                macId = "mac-1",
+                tlsFingerprint = "AABBCCDDEEFF00112233445566778899AABBCCDDEEFF00112233445566778899",
+            ),
+            object : NetworkClient.Listener {
+                override fun onConnected(macName: String) = Unit
+                override fun onDisconnected(reason: String) = Unit
+                override fun onClipboardFromMac(text: String) = Unit
+                override fun onPong(id: String, rttMillis: Long) = Unit
+            },
+        )
+        val socketField = NetworkClient::class.java.getDeclaredField("socket")
+        socketField.isAccessible = true
+        socketField.set(client, socket)
+
+        client.close()
+        waitFor { closingThread.get() != null }
+
+        assertNotSame(Thread.currentThread(), closingThread.get())
+    }
+
+    @Test
+    fun reconnectScheduleBacksOffWhileMacUnavailableAndResetsAfterConnection() {
+        val schedule = ReconnectSchedule(
+            baseDelayMillis = 5_000,
+            maxDelayMillis = 30_000,
+            nowMillis = { 100_000 },
+        )
+
+        assertEquals(true, schedule.canAttempt())
+        schedule.recordFailure()
+        assertEquals(false, schedule.canAttempt())
+        assertEquals(true, schedule.canAttempt(nowMillis = 105_000))
+
+        schedule.recordFailure(nowMillis = 105_000)
+        assertEquals(false, schedule.canAttempt(nowMillis = 114_999))
+        assertEquals(true, schedule.canAttempt(nowMillis = 115_000))
+
+        repeat(5) { schedule.recordFailure(nowMillis = 200_000L + it) }
+        schedule.recordSuccess()
+        assertEquals(true, schedule.canAttempt(nowMillis = 300_000))
+    }
+
+    @Test
+    fun reconnectScheduleStopsAfterBoundedFailuresUntilNewWorkArrives() {
+        val schedule = ReconnectSchedule(
+            baseDelayMillis = 5_000,
+            maxDelayMillis = 30_000,
+            maxAttempts = 3,
+            nowMillis = { 100_000 },
+        )
+
+        schedule.recordFailure(nowMillis = 100_000)
+        schedule.recordFailure(nowMillis = 105_000)
+        schedule.recordFailure(nowMillis = 115_000)
+
+        assertEquals(true, schedule.isExhausted())
+        assertEquals(false, schedule.canAttempt(nowMillis = 1_000_000))
+
+        schedule.wake(nowMillis = 1_100_000)
+
+        assertEquals(false, schedule.isExhausted())
+        assertEquals(true, schedule.canAttempt(nowMillis = 1_100_000))
+    }
+
+    @Test
+    fun outboundWorkQueueKeepsLatestNotificationAndStaysBounded() {
+        val queue = OutboundWorkQueue(maxSize = 3)
+        val notification = { id: String ->
+            OutboundWork.Notification(
+                NotificationPayload(
+                    id = id,
+                    packageName = "pkg",
+                    appName = "App",
+                    title = "title-$id",
+                    text = "text-$id",
+                    timestampMillis = 1,
+                ),
+            )
+        }
+
+        queue.enqueue(OutboundWork.Clipboard("first"))
+        queue.enqueue(notification("same-id"))
+        queue.enqueue(notification("same-id"))
+        queue.enqueue(notification("new-id"))
+        queue.enqueue(notification("extra-id"))
+
+        assertEquals(3, queue.size)
+        assertEquals("text-same-id", ((queue.dequeue() as OutboundWork.Notification).payload).text)
+        assertEquals("new-id", ((queue.dequeue() as OutboundWork.Notification).payload).id)
+        assertEquals("extra-id", ((queue.dequeue() as OutboundWork.Notification).payload).id)
+        assertEquals(null, queue.dequeue())
+    }
+
+    @Test
+    fun outboundWorkQueueKeepsOnlyLatestExplicitClipboardRequest() {
+        val queue = OutboundWorkQueue()
+
+        queue.enqueue(OutboundWork.Clipboard("old"))
+        queue.enqueue(OutboundWork.Clipboard("new"))
+
+        assertEquals(1, queue.size)
+        assertEquals("new", (queue.dequeue() as OutboundWork.Clipboard).text)
+        assertEquals(null, queue.dequeue())
+    }
+
+    @Test
     fun healthPingTrackerSeparatesUserPingFromBackgroundPing() {
         val tracker = HealthPingTracker(timeoutMillis = 8_000L)
 
@@ -296,6 +476,13 @@ class ProtocolCodecTest {
         assertNull(MacDiscoveryMatcher.fromResolvedAttributes("mac-1", "192.168.0.2", 47655, attributes + ("protocolVersion" to "1")))
         assertEquals(true, MacDiscoveryMatcher.serviceTypeMatches("_macdroidnotify._tcp"))
         assertEquals(true, MacDiscoveryMatcher.serviceTypeMatches("_macdroidnotify._tcp."))
+    }
+}
+
+private fun waitFor(condition: () -> Boolean) {
+    val deadline = System.currentTimeMillis() + 2_000
+    while (!condition() && System.currentTimeMillis() < deadline) {
+        Thread.sleep(20)
     }
 }
 

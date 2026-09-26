@@ -20,6 +20,7 @@ final class TcpNotificationServer {
     private let queue = DispatchQueue(label: "dev.svrx.macdroidnotify.server")
     private var listener: NWListener?
     private var activeSession: ClientSession?
+    private var pendingClipboardQueue = PendingClipboardQueue()
 
     init(port: UInt16, token: Data, tlsIdentity: SecIdentity, bonjourRecord: BonjourTXTRecord) {
         self.port = port
@@ -61,11 +62,13 @@ final class TcpNotificationServer {
         listener.start(queue: queue)
     }
 
-    func sendClipboardToAndroid(_ payload: ClipboardPayload) throws {
-        guard let activeSession else {
-            throw TcpNotificationServerError.notConnected
+    func sendClipboardToAndroid(_ payload: ClipboardPayload) {
+        pendingClipboardQueue.enqueue(payload)
+        if activeSession?.isAuthenticated != true {
+            delegate?.serverDidUpdateStatus("Android 연결 후 클립보드를 전송합니다.")
+            return
         }
-        try activeSession.send(.clipboardToAndroid(payload))
+        sendPendingClipboard()
     }
 
     func stop() {
@@ -88,10 +91,23 @@ final class TcpNotificationServer {
             self?.delegate?.serverDidReceiveClipboardText(text)
         }
         session.onAuthenticated = { [weak self] deviceName in
-            self?.delegate?.serverDidAuthenticateDevice(deviceName: deviceName)
+            guard let self else { return }
+            self.delegate?.serverDidAuthenticateDevice(deviceName: deviceName)
+            self.sendPendingClipboard()
         }
         activeSession = session
         session.start(queue: queue)
+    }
+
+    private func sendPendingClipboard() {
+        guard let activeSession else { return }
+        guard let payload = pendingClipboardQueue.take() else { return }
+
+        do {
+            try activeSession.send(.clipboardToAndroid(payload))
+        } catch {
+            pendingClipboardQueue.enqueue(payload)
+        }
     }
 }
 
@@ -119,6 +135,7 @@ private final class ClientSession {
     private let token: Data
     private let nonce = RandomToken.nonce()
     private var authenticated = false
+    private(set) var isAuthenticated = false
     private var buffer = Data()
 
     init(connection: NWConnection, token: Data) {
@@ -203,6 +220,7 @@ private final class ClientSession {
             throw ProtocolError.authenticationFailed
         }
         authenticated = true
+        isAuthenticated = true
         onStatus?("Android 연결됨: \(payload.deviceName)")
         onAuthenticated?(payload.deviceName)
         try send(.pairingAccepted(PairingAcceptedPayload(

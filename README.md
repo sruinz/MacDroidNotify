@@ -2,7 +2,7 @@
 
 개인용 Android ↔ Mac 알림 및 클립보드 브리지입니다.
 
-- 현재 버전: `0.2.2`
+- 현재 버전: `0.2.3`
 - Android 앱 ID: `dev.svrx.macdroidnotify`
 - macOS 번들 ID: `dev.svrx.macdroidnotify.app`
 - 라이선스: MIT
@@ -16,9 +16,11 @@
 - 첫 페어링 성공 후 Mac 로그인 시 자동 실행을 기본으로 켜고, 메뉴에서 끌 수 있습니다.
 - Android 앱을 다시 열면 이전에 켜둔 서비스가 자동으로 다시 연결을 시도하고, Android 앱의 옵션을 켜면 기기 재부팅 후에도 자동 시작합니다.
 - Android 앱은 Wi-Fi 연결일 때만 네트워크 재연결을 시도하고, 모바일 데이터에서는 시도하지 않습니다.
+- Mac에 연결할 수 없으면 재시도를 세 번만 하고 대기 상태로 들어갑니다. 이후 Android 알림, 클립보드 전송, 핑/테스트 같은 실제 작업이 생기면 다시 시도합니다.
 - Android 앱에서 연결 상태, 핑 RTT, 테스트 알림 전송 결과를 확인합니다.
 - Mac 메뉴 막대에서 Mac 텍스트 클립보드를 Android로 보냅니다.
 - Android 앱 또는 빠른 설정 타일에서 Android 텍스트 클립보드를 Mac으로 보냅니다.
+- 클립보드 전송 요청은 요청한 순간의 텍스트를 기준으로 대기하며, 연결이 끊겨 있으면 마지막 요청 한 개만 연결 복구 후 전송합니다.
 - 같은 Wi-Fi 안에서 TLS가 적용된 TCP NDJSON 프로토콜과 랜덤 페어링 토큰을 사용합니다.
 
 ## 하지 않는 것
@@ -48,7 +50,7 @@
 6. `테스트 알림 보내기`로 Mac 알림 표시가 되는지 확인합니다.
 7. 이후 Android에 도착한 알림이 Mac 알림 센터에 표시됩니다.
 
-현재 0.2.2는 개인 사용을 기준으로 만든 초기 버전입니다. 범용 스토어 배포는 제공하지 않습니다.
+현재 0.2.3는 개인 사용을 기준으로 만든 초기 버전입니다. 범용 스토어 배포는 제공하지 않습니다.
 
 ## 소스에서 직접 빌드
 
@@ -99,8 +101,8 @@ JAVA_HOME=/opt/homebrew/opt/openjdk scripts/prepare-release-binaries.sh
 결과는 `artifacts/release-binaries/`에 생성됩니다.
 
 ```text
-MacDroidNotify-android-0.2.2.apk
-MacDroidNotify-mac-0.2.2.zip
+MacDroidNotify-android-0.2.3.apk
+MacDroidNotify-mac-0.2.3.zip
 SHA256SUMS.txt
 ```
 

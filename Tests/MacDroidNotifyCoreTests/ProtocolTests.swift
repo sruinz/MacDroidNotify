@@ -41,6 +41,18 @@ import Testing
     }
 }
 
+@Test func pendingClipboardQueueKeepsOnlyLatestExplicitRequest() {
+    var queue = PendingClipboardQueue()
+
+    #expect(queue.take() == nil)
+
+    queue.enqueue(ClipboardPayload(text: "first", timestampMillis: 1))
+    queue.enqueue(ClipboardPayload(text: "second", timestampMillis: 2))
+
+    #expect(queue.take()?.text == "second")
+    #expect(queue.take() == nil)
+}
+
 @Test func ndjsonCodecRoundTripsNotificationMessage() throws {
     let message = WireMessage.notificationPosted(NotificationPayload(
         id: "id",

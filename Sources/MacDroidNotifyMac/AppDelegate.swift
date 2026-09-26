@@ -147,7 +147,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, TcpNotificationServerD
         let payload = ClipboardPayload(text: text, timestampMillis: currentTimeMillis())
         do {
             let validated = try payload.validated()
-            try server?.sendClipboardToAndroid(validated)
+            server?.sendClipboardToAndroid(validated)
             menu?.updateStatus("클립보드 전송됨")
         } catch ProtocolError.clipboardTooLarge {
             showError("클립보드 텍스트가 32 KiB보다 큽니다.")
